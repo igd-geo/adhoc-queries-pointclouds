@@ -1,3 +1,4 @@
+use anyhow::{anyhow, Result};
 use bincode;
 use nalgebra::Vector3;
 use serde::{Deserialize, Serialize};
@@ -52,11 +53,11 @@ impl LASHeader {
 /**
  * Try parsing a LAS header from the given binary blob
  */
-pub fn try_parse_las_header(data: &[u8]) -> Result<LASHeader, String> {
+pub fn try_parse_las_header(data: &[u8]) -> Result<LASHeader> {
     if data.len() < 227 {
-        return Err(
-            "Could not parse LAS header, buffer has to be at least 227 bytes large!".into(),
-        );
+        return Err(anyhow!(
+            "Could not parse LAS header, buffer has to be at least 227 bytes large!"
+        ));
     }
-    bincode::deserialize(data).map_err(|e| format!("Could not deserialize LAS header: {}", e))
+    bincode::deserialize(data).map_err(|e| anyhow!("Could not deserialize LAS header: {}", e))
 }
