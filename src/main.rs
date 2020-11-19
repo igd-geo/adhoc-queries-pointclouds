@@ -10,6 +10,7 @@ use clap::{value_t, App, Arg};
 use memmap::MmapOptions;
 use nalgebra::Vector3;
 use rayon::prelude::*;
+use rayon::prelude::*;
 use std::convert::TryInto;
 use std::fs;
 use std::path::Path;
@@ -104,10 +105,27 @@ fn run_search_sequential(
 
 fn run_search_parallel(
     files: &Vec<PathBuf>,
-    searcher: &dyn Searcher,
+    searcher: &(dyn Searcher + Sync),
     search_impl: SearchImplementation,
 ) -> Result<()> {
-    todo!("not implemented")
+    let results = files
+        .par_iter()
+        .map(|file| -> Result<collect_points::BufferCollector> {
+            let mut collector = collect_points::BufferCollector::new();
+            searcher.search_file(&file, &search_impl, &mut collector)?;
+            Ok(collector)
+        })
+        .collect::<Result<Vec<_>>>();
+
+    let separate_buffers = results?;
+    let matches: usize = separate_buffers
+        .iter()
+        .map(|buffer| buffer.buffer().len())
+        .sum();
+
+    println!("Found {} matching points", matches);
+
+    Ok(())
 }
 
 fn main() -> Result<()> {
@@ -126,7 +144,7 @@ fn main() -> Result<()> {
                             .required(true))
                           .arg(Arg::with_name("BOUNDS")
                                 .long("bounds")
-                               .help("Bounding box to search points in. Specify this as string \"minX,minY,minZ,maxX,maxY,maxZ\" in the target SRS of the input dataset")
+                               .help("Bounding box to search points in. Specify this as string \"minX;minY;minZ;maxX;maxY;maxZ\" in the target SRS of the input dataset")
                                .takes_value(true)
                             )
                           .arg(Arg::with_name("CLASS")
@@ -159,7 +177,7 @@ fn main() -> Result<()> {
         return Err(anyhow!("Found neither BOUNDS nor CLASS argument but exactly one of these arguments is required!"));
     }
 
-    let searcher: Box<dyn search::Searcher> = if maybe_bounds.is_some() {
+    let searcher: Box<dyn search::Searcher + Sync> = if maybe_bounds.is_some() {
         let bounds = maybe_bounds
             .unwrap()
             .context("Could not parse argument BOUNDS")?;

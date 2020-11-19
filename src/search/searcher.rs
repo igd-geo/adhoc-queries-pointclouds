@@ -3,6 +3,8 @@ use crate::math::AABB;
 use crate::search::{
     search_las_file_by_bounds, search_las_file_by_bounds_optimized,
     search_las_file_by_classification, search_las_file_by_classification_optimized,
+    search_laz_file_by_bounds, search_laz_file_by_bounds_optimized,
+    search_laz_file_by_classification, search_laz_file_by_classification_optimized,
 };
 use anyhow::{anyhow, Result};
 use std::ffi::OsStr;
@@ -50,10 +52,10 @@ impl Searcher for BoundsSearcher {
             },
             Some("laz") => match search_impl {
                 SearchImplementation::Regular => {
-                    search_las_file_by_bounds(path, &self.bounds, collector)
+                    search_laz_file_by_bounds(path, &self.bounds, collector)
                 }
                 SearchImplementation::Optimized => {
-                    search_las_file_by_bounds_optimized(path, &self.bounds, collector)
+                    search_laz_file_by_bounds_optimized(path, &self.bounds, collector)
                 }
             },
             Some(_) => Err(anyhow!(
@@ -94,10 +96,10 @@ impl Searcher for ClassSearcher {
             },
             Some("laz") => match search_impl {
                 SearchImplementation::Regular => {
-                    search_las_file_by_classification(path, self.class, collector)
+                    search_laz_file_by_classification(path, self.class, collector)
                 }
                 SearchImplementation::Optimized => {
-                    search_las_file_by_classification_optimized(path, self.class, collector)
+                    search_laz_file_by_classification_optimized(path, self.class, collector)
                 }
             },
             Some(_) => Err(anyhow!(
