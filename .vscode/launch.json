@@ -6,14 +6,25 @@
     "configurations": [
         {
             "name": "Launch (Debug)",
-            "type": "cppvsdbg",
+            "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/target/debug/io_tests.exe",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=io_tests",
+                    "--package=io_tests"
+                ],
+                "filter": {
+                    "name": "io_tests",
+                    "kind": "bin"
+                }
+            },
             "args": [
                 "-i",
-                "D:/data/geo/test_las",
+                "/home/pbormann/data/geodata/pointclouds/NavVisHQ-5thFloor.laser",
                 "--bounds",
-                "360500;5628150;90;360550;5628200;130"
+                "-2;0;0;10;10;10",
+                "-o"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

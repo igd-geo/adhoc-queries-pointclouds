@@ -146,6 +146,7 @@ fn main() -> Result<()> {
                                 .long("bounds")
                                .help("Bounding box to search points in. Specify this as string \"minX;minY;minZ;maxX;maxY;maxZ\" in the target SRS of the input dataset")
                                .takes_value(true)
+                               .allow_hyphen_values(true)
                             )
                           .arg(Arg::with_name("CLASS")
                                 .long("class")
