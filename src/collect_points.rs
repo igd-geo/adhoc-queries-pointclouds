@@ -121,7 +121,6 @@ impl ResultCollector for GridSampledCollector {
     }
 
     fn points(&self) -> Option<Vec<Point>> {
-        println!("Active cells: {}", self.grid.cells().count());
         Some(self.grid.points().map(|p| p.clone()).collect())
     }
 
