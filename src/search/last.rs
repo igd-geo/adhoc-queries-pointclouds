@@ -227,7 +227,7 @@ pub fn search_last_file_by_classification<P: AsRef<Path>>(
 
     let num_chunks = (metadata.point_count() + chunk_size - 1) / chunk_size;
     for idx in 0..num_chunks {
-        let points_in_chunk = metadata.point_count() - (idx * chunk_size);
+        let points_in_chunk = usize::min(chunk_size, metadata.point_count() - (idx * chunk_size));
         point_source.read_into(&mut point_buffer, points_in_chunk)?;
 
         for point_idx in 0..points_in_chunk {

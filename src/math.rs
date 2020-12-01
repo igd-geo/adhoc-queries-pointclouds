@@ -3,7 +3,7 @@ use nalgebra::Vector3;
 /**
  * 3D axis-aligned bounding box
  */
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy)]
 pub struct AABB<T: nalgebra::Scalar + PartialOrd> {
     pub min: Vector3<T>,
     pub max: Vector3<T>,
@@ -39,5 +39,23 @@ impl From<AABB<f64>> for pointstream::math::AABB {
 impl From<&AABB<f64>> for pointstream::math::AABB {
     fn from(bounds: &AABB<f64>) -> Self {
         pointstream::math::AABB::from_min_max(bounds.min, bounds.max)
+    }
+}
+
+impl From<pointstream::math::AABB> for AABB<f64> {
+    fn from(bounds: pointstream::math::AABB) -> Self {
+        Self {
+            min: bounds.min,
+            max: bounds.max,
+        }
+    }
+}
+
+impl From<&pointstream::math::AABB> for AABB<f64> {
+    fn from(bounds: &pointstream::math::AABB) -> Self {
+        Self {
+            min: bounds.min,
+            max: bounds.max,
+        }
     }
 }

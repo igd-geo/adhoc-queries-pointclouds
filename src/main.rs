@@ -1,14 +1,18 @@
 extern crate serde;
 
 mod collect_points;
+mod dump_points;
+mod grid_sampling;
 mod las;
 mod math;
 mod search;
 
+use crate::collect_points::ResultCollector;
 use anyhow::{anyhow, Context, Result};
 use clap::{value_t, App, Arg};
 use memmap::MmapOptions;
 use nalgebra::Vector3;
+use pointstream::pointcloud::PointSource;
 use rayon::prelude::*;
 use rayon::prelude::*;
 use std::convert::TryInto;
@@ -18,6 +22,8 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use crate::search::{SearchImplementation, Searcher};
+
+type CollectorFactoryFn = Box<dyn Fn() -> Result<Box<dyn collect_points::ResultCollector + Send>> + Sync>;
 
 /**
  * Returns all input files from the given file path or directory path. Directories are not traversed recursively!
@@ -87,18 +93,47 @@ fn parse_aabb(aabb_str: &str) -> Result<math::AABB<f64>> {
     ))
 }
 
+fn get_total_bounds(files : &[PathBuf]) -> Result<math::AABB<f64>> {
+    let factory = pointstream::pointcloud::PointcloudFactory::new();
+    let file_bounds = files.iter().map(|f| -> Result<math::AABB<f64>> {
+        let mut source = factory.create_point_source(&f)?;
+        Ok(source.metadata().bounds().into())
+    }).collect::<Result<Vec<_>, _>>()?;
+
+    let mut total_bounds = math::AABB::new(Vector3::new(f64::MAX, f64::MAX, f64::MAX), Vector3::new(f64::MIN, f64::MIN, f64::MIN));
+    for other_bounds in file_bounds.iter() {
+        total_bounds.min.x = pointstream::math::fmin(total_bounds.min.x, other_bounds.min.x);
+        total_bounds.min.y = pointstream::math::fmin(total_bounds.min.y, other_bounds.min.y);
+        total_bounds.min.z = pointstream::math::fmin(total_bounds.min.z, other_bounds.min.z);
+
+        total_bounds.max.x = pointstream::math::fmin(total_bounds.max.x, other_bounds.max.x);
+        total_bounds.max.y = pointstream::math::fmin(total_bounds.max.y, other_bounds.max.y);
+        total_bounds.max.z = pointstream::math::fmin(total_bounds.max.z, other_bounds.max.z);
+    }
+
+    Ok(total_bounds)
+}
+
 fn run_search_sequential(
     files: &Vec<PathBuf>,
     searcher: &dyn Searcher,
     search_impl: SearchImplementation,
+    collector_factory_fn: CollectorFactoryFn,
+    point_dumper : &mut dyn dump_points::PointDumper,
 ) -> Result<()> {
-    let mut collector = collect_points::BufferCollector::new();
+    let mut collector = collector_factory_fn()?;
 
     for file in files.iter() {
-        searcher.search_file(&file, &search_impl, &mut collector)?;
+        searcher.search_file(&file, &search_impl, collector.as_mut())?;
     }
 
-    println!("Found {} matching points", collector.buffer().len(),);
+    if let Some(points_ref) = collector.points_ref() {
+        point_dumper.dump_points(points_ref)?;
+    } else if let Some(points) = collector.points() {
+        point_dumper.dump_points(points.as_slice())?;
+    } else {
+        println!("Found {} matching points", collector.point_count());
+    }
 
     Ok(())
 }
@@ -107,28 +142,58 @@ fn run_search_parallel(
     files: &Vec<PathBuf>,
     searcher: &(dyn Searcher + Sync),
     search_impl: SearchImplementation,
+    collector_factory_fn: CollectorFactoryFn,
+    point_dumper : &mut dyn dump_points::PointDumper,
 ) -> Result<()> {
     let results = files
         .par_iter()
-        .map(|file| -> Result<collect_points::BufferCollector> {
-            let mut collector = collect_points::BufferCollector::new();
-            searcher.search_file(&file, &search_impl, &mut collector)?;
+        .map(|file| -> Result<Box<dyn ResultCollector + Send>> {
+            let mut collector = collector_factory_fn()?;
+
+            searcher.search_file(&file, &search_impl, collector.as_mut())?;
             Ok(collector)
         })
         .collect::<Result<Vec<_>>>();
 
     let separate_buffers = results?;
-    let matches: usize = separate_buffers
-        .iter()
-        .map(|buffer| buffer.buffer().len())
-        .sum();
+    let mut num_matches = None;
+    for collector in separate_buffers.iter() {
+        if let Some(points_ref) = collector.points_ref() {
+            point_dumper.dump_points(points_ref)?;
+        } else if let Some(points) = collector.points() {
+            point_dumper.dump_points(points.as_slice())?;
+        } else {
+            match num_matches {
+                Some(cur_matches) => num_matches = Some(cur_matches + collector.point_count()),
+                None => num_matches = Some(collector.point_count()),
+            }
+        }
+    }
 
-    println!("Found {} matching points", matches);
+    if let Some(matches) = num_matches {
+        println!("Found {} matching points", matches);
+    }
 
     Ok(())
 }
 
 fn main() -> Result<()> {
+    // {
+    //     let dirs = get_all_input_files(Path::new(
+    //         "/home/pbormann/data/geodata/pointclouds/datasets/district_of_columbia",
+    //     ))?;
+    //     let metas = dirs
+    //         .iter()
+    //         .map(|path| {
+    //             let mut src = pointstream::pointcloud::LasSource::new(path).unwrap();
+    //             src.metadata().clone()
+    //         })
+    //         .collect::<Vec<_>>();
+
+    //     let all_meta = pointstream::pointcloud::Metadata::combine_many(metas.iter()).unwrap();
+    //     println!("{:?}", all_meta.bounds());
+    // }
+
     let t_start = Instant::now();
 
     let matches = App::new("I/O experiments")
@@ -152,13 +217,17 @@ fn main() -> Result<()> {
                                 .long("class")
                                .help("Object class to search points for. This is a single 8-bit unsigned integer value corresponding to the valid classes in the LAS file specification")
                                .takes_value(true)
-                            )
-                          .arg(Arg::with_name("PARALLEL").long("parallel").short("p").help("Run search in parallel on multiple threads"))
-                          .arg(Arg::with_name("OPTIMIZED").long("optimized").short("o").help("Run search with optimized implementation"))
+                            ) 
+                          .arg(Arg::with_name("OUTPUT").long("output").short("o").help("Path to output directory for storing found points in. If this parameter is omitted, only the number of matching points is reported in the command line").takes_value(true))
+                          .arg(Arg::with_name("DENSITY").long("density").help("Maximum density of the resulting dataset. A density of 1 is equal to a minimum spacing of 1 meter between points.").takes_value(true))
+                          .arg(Arg::with_name("PARALLEL").long("parallel").help("Run search in parallel on multiple threads"))
+                          .arg(Arg::with_name("OPTIMIZED").long("optimized").help("Run search with optimized implementation"))
                           .get_matches();
 
     let input_dir = Path::new(matches.value_of("INPUT").unwrap());
     let input_files = get_all_input_files(input_dir)?;
+
+    let maybe_output_dir = matches.value_of("OUTPUT").map(|p| Path::new(p));
 
     let total_file_size: u64 = input_files
         .iter()
@@ -168,8 +237,9 @@ fn main() -> Result<()> {
     let run_in_parallel = matches.is_present("PARALLEL");
     let run_optimized = matches.is_present("OPTIMIZED");
 
-    let maybe_bounds = matches.value_of("BOUNDS").map(parse_aabb);
-    let maybe_class = matches.value_of("CLASS").map(str::parse::<u8>);
+    let maybe_bounds = matches.value_of("BOUNDS").map(parse_aabb).map(|res| res.expect("Could not prase argument BOUNDS"));
+    let maybe_class = matches.value_of("CLASS").map(str::parse::<u8>).map(|res| res.expect("Could not prase argument CLASS"));
+    let maybe_density = matches.value_of("DENSITY").map(str::parse::<f64>).map(|res| res.expect("Could not prase argument DENSITY"));
     if maybe_bounds.is_some() && maybe_class.is_some() {
         return Err(anyhow!("Specifying BOUNDS and CLASS at the same time is invalid! Specify either BOUNDS or CLASS argument!"));
     }
@@ -178,16 +248,41 @@ fn main() -> Result<()> {
         return Err(anyhow!("Found neither BOUNDS nor CLASS argument but exactly one of these arguments is required!"));
     }
 
-    let searcher: Box<dyn search::Searcher + Sync> = if maybe_bounds.is_some() {
-        let bounds = maybe_bounds
-            .unwrap()
-            .context("Could not parse argument BOUNDS")?;
-        Box::new(search::BoundsSearcher::new(bounds))
+    let searcher: Box<dyn search::Searcher + Sync> = if let Some(ref bounds) = maybe_bounds {
+        Box::new(search::BoundsSearcher::new(bounds.clone()))
     } else {
-        let class = maybe_class
-            .unwrap()
-            .context("Could not parse argument CLASS")?;
+        let class = maybe_class.unwrap();
         Box::new(search::ClassSearcher::new(class))
+    };
+
+    let collector_factory : CollectorFactoryFn = if let Some(density) = maybe_density {
+        let cell_size = density;
+        let bounds : math::AABB::<f64> = if let Some(ref bounds) = maybe_bounds {
+            bounds.clone()
+        } else {
+            get_total_bounds(&input_files)?
+        };
+
+        Box::new(move || {
+            let collector = collect_points::GridSampledCollector::new(bounds, cell_size)?;
+            Ok(Box::new(collector))
+        })
+    } else if maybe_output_dir.is_some() {
+        Box::new(|| {
+            Ok(Box::new(collect_points::BufferCollector::new()))
+        })
+    } else {
+        Box::new(|| {
+            Ok(Box::new(collect_points::CountCollector::new()))
+        })
+    };
+
+    let mut point_dumper : Box<dyn dump_points::PointDumper> = match maybe_output_dir {
+        Some(output_dir) => {
+            let dumper = dump_points::FileDumper::new(output_dir)?;
+            Box::new(dumper)
+        },
+        None => Box::new(dump_points::IgnoreDumper::new())
     };
 
     let search_impl = if run_optimized {
@@ -196,10 +291,24 @@ fn main() -> Result<()> {
         SearchImplementation::Regular
     };
 
+    println!("Searching {} files...", input_files.len());
+
     if run_in_parallel {
-        run_search_parallel(&input_files, searcher.as_ref(), search_impl)?;
+        run_search_parallel(
+            &input_files,
+            searcher.as_ref(),
+            search_impl,
+            collector_factory,
+            point_dumper.as_mut(),
+        )?;
     } else {
-        run_search_sequential(&input_files, searcher.as_ref(), search_impl)?;
+        run_search_sequential(
+            &input_files,
+            searcher.as_ref(),
+            search_impl,
+            collector_factory,
+            point_dumper.as_mut(),
+        )?;
     }
 
     let elapsed_seconds = t_start.elapsed().as_secs_f64();
