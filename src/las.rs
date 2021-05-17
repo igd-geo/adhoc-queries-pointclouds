@@ -1,9 +1,7 @@
 use anyhow::{anyhow, Result};
 use bincode;
-use nalgebra::Vector3;
+use pasture_core::{math::AABB, nalgebra::{Point3, Vector3}};
 use serde::{Deserialize, Serialize};
-
-use crate::math;
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct LASHeader {
@@ -42,10 +40,10 @@ pub struct LASHeader {
 }
 
 impl LASHeader {
-    pub fn bounds(&self) -> math::AABB<f64> {
-        math::AABB::new(
-            Vector3::new(self.min_x, self.min_y, self.min_z),
-            Vector3::new(self.max_x, self.max_y, self.max_z),
+    pub fn bounds(&self) -> AABB<f64> {
+        AABB::from_min_max(
+            Point3::new(self.min_x, self.min_y, self.min_z),
+            Point3::new(self.max_x, self.max_y, self.max_z),
         )
     }
 }

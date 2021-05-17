@@ -1,9 +1,4 @@
 use crate::collect_points::ResultCollector;
-use crate::math::AABB;
-use crate::search::search_laser_file_by_bounds;
-use crate::search::search_laser_file_by_bounds_optimized;
-use crate::search::search_laser_file_by_classification;
-use crate::search::search_laser_file_by_classification_optimized;
 use crate::search::search_last_file_by_bounds;
 use crate::search::search_last_file_by_bounds_optimized;
 use crate::search::search_last_file_by_classification;
@@ -17,6 +12,7 @@ use crate::search::{
     search_laz_file_by_classification, search_laz_file_by_classification_optimized,
 };
 use anyhow::{anyhow, Result};
+use pasture_core::math::AABB;
 use std::ffi::OsStr;
 use std::path::Path;
 
@@ -76,14 +72,14 @@ impl Searcher for BoundsSearcher {
                     search_last_file_by_bounds_optimized(path, &self.bounds, collector)
                 }
             },
-            Some("laser") => match search_impl {
-                SearchImplementation::Regular => {
-                    search_laser_file_by_bounds(path, &self.bounds, collector)
-                }
-                SearchImplementation::Optimized => {
-                    search_laser_file_by_bounds_optimized(path, &self.bounds, collector)
-                }
-            },
+            // Some("laser") => match search_impl {
+            //     SearchImplementation::Regular => {
+            //         search_laser_file_by_bounds(path, &self.bounds, collector)
+            //     }
+            //     SearchImplementation::Optimized => {
+            //         search_laser_file_by_bounds_optimized(path, &self.bounds, collector)
+            //     }
+            // },
             Some("lazer") => search_lazer_file_by_bounds(path, &self.bounds, collector),
             Some(_) => Err(anyhow!(
                 "Unsupported file extension in file {}",
@@ -137,14 +133,14 @@ impl Searcher for ClassSearcher {
                     search_last_file_by_classification_optimized(path, self.class, collector)
                 }
             },
-            Some("laser") => match search_impl {
-                SearchImplementation::Regular => {
-                    search_laser_file_by_classification(path, self.class, collector)
-                }
-                SearchImplementation::Optimized => {
-                    search_laser_file_by_classification_optimized(path, self.class, collector)
-                }
-            },
+            // Some("laser") => match search_impl {
+            //     SearchImplementation::Regular => {
+            //         search_laser_file_by_classification(path, self.class, collector)
+            //     }
+            //     SearchImplementation::Optimized => {
+            //         search_laser_file_by_classification_optimized(path, self.class, collector)
+            //     }
+            // },
             Some("lazer") => search_lazer_file_by_classification(path, self.class, collector),
             Some(_) => Err(anyhow!(
                 "Unsupported file extension in file {}",

@@ -1,13 +1,9 @@
-use crate::collect_points::ResultCollector;
-use crate::math::AABB;
+use crate::{collect_points::ResultCollector, points::{LAZERSource, Point}};
 use anyhow::{anyhow, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use memmap::MmapOptions;
-use nalgebra::Vector3;
-use pointstream::pointcloud::{
-    LazerSource, LinearPointBuffer, PointAttributes, PointBufferReadable, PointBufferWriteable,
-    PointSource,
-};
+use pasture_core::{containers::{PerAttributePointBufferExt, PerAttributeVecPointStorage, PointBufferExt}, layout::{PointType, attributes::{CLASSIFICATION, POSITION_3D}}, math::AABB, nalgebra::{Point3, Vector3}};
+use pasture_io::{base::PointReader, las_rs::raw};
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::SeekFrom;
@@ -25,8 +21,8 @@ fn open_file_reader<P: AsRef<Path>>(path: P) -> Result<Cursor<memmap::Mmap>> {
     }
 }
 
-fn parse_las_header<R: std::io::Read>(mut reader: R) -> Result<las::raw::Header> {
-    let raw_header = las::raw::Header::read_from(reader)?;
+fn parse_las_header<R: std::io::Read>(mut reader: R) -> Result<raw::Header> {
+    let raw_header = raw::Header::read_from(reader)?;
     Ok(raw_header)
 }
 
@@ -35,36 +31,34 @@ pub fn search_lazer_file_by_bounds<P: AsRef<Path>>(
     bounds: &AABB<f64>,
     result_collector: &mut dyn ResultCollector,
 ) -> Result<()> {
-    let reader = open_file_reader(path)?;
+    let mmap = open_file_reader(path)?;
 
-    let mut point_source = LazerSource::from(reader)?;
+    let mut reader = LAZERSource::from(mmap)?;
 
-    let metadata = point_source.metadata().clone();
-    if !metadata.bounds().intersects(&bounds.into()) {
+    let metadata = reader.get_metadata();
+    let num_points = metadata.number_of_points().expect("No number of points found in LAZER file");
+    if !metadata.bounds().expect("No bounds found in LAZER file").intersects(&bounds) {
         return Ok(());
     }
 
     // Read in chunks equal to the block size
-    let chunk_size = point_source.block_size() as usize;
-    let mut point_buffer = LinearPointBuffer::new(chunk_size, PointAttributes::Position);
+    let chunk_size = reader.block_size() as usize;
+    let mut point_buffer = PerAttributeVecPointStorage::with_capacity(chunk_size, Point::layout());
 
-    let num_chunks = (metadata.point_count() + chunk_size - 1) / chunk_size;
+    let num_chunks = (num_points + chunk_size - 1) / chunk_size;
     for idx in 0..num_chunks {
-        let points_in_chunk = usize::min(chunk_size, metadata.point_count() - (idx * chunk_size));
-        point_source.read_into(&mut point_buffer, points_in_chunk)?;
+        let points_in_chunk = usize::min(chunk_size, num_points - (idx * chunk_size));
+        reader.read_into(&mut point_buffer, points_in_chunk)?;
 
         point_buffer
-            .positions()
+            .get_attribute_range_ref::<Vector3<f64>>(0..points_in_chunk, &POSITION_3D)
             .iter()
-            .take(points_in_chunk)
-            .filter(|pos| bounds.contains(pos))
-            .for_each(|pos| {
-                let point = las::point::Point {
-                    x: pos.x,
-                    y: pos.y,
-                    z: pos.z,
-                    ..Default::default()
-                };
+            .enumerate()
+            .filter(|(_, pos)| {
+                bounds.contains(&(**pos).into())
+            })
+            .for_each(|(idx, _)| {
+                let point = point_buffer.get_point::<Point>(idx);
                 result_collector.collect_one(point);
             });
     }
@@ -76,40 +70,31 @@ pub fn search_lazer_file_by_classification<P: AsRef<Path>>(
     class: u8,
     result_collector: &mut dyn ResultCollector,
 ) -> Result<()> {
-    let reader = open_file_reader(path)?;
+    let mmap = open_file_reader(path)?;
 
-    let mut point_source = LazerSource::from(reader)?;
+    let mut reader = LAZERSource::from(mmap)?;
 
-    let metadata = point_source.metadata().clone();
+    let metadata = reader.get_metadata();
+    let num_points = metadata.number_of_points().expect("No number of points found in LAZER file");
 
     // Read in chunks equal to the block size
-    let chunk_size = point_source.block_size() as usize;
-    let mut point_buffer = LinearPointBuffer::new(
-        chunk_size,
-        PointAttributes::Position | PointAttributes::Classification,
-    );
+    let chunk_size = reader.block_size() as usize;
+    let mut point_buffer = PerAttributeVecPointStorage::with_capacity(chunk_size, Point::layout());
 
-    let num_chunks = (metadata.point_count() + chunk_size - 1) / chunk_size;
+    let num_chunks = (num_points + chunk_size - 1) / chunk_size;
     for idx in 0..num_chunks {
-        let points_in_chunk = usize::min(chunk_size, metadata.point_count() - (idx * chunk_size));
-        point_source.read_into(&mut point_buffer, points_in_chunk)?;
+        let points_in_chunk = usize::min(chunk_size, num_points - (idx * chunk_size));
+        reader.read_into(&mut point_buffer, points_in_chunk)?;
 
-        for point_idx in 0..points_in_chunk {
-            let point_class = point_buffer.classifications().unwrap()[point_idx];
-            if point_class != class {
-                continue;
-            }
-
-            let point_position = point_buffer.positions()[point_idx];
-            let point = las::point::Point {
-                x: point_position.x,
-                y: point_position.y,
-                z: point_position.z,
-                classification: las::point::Classification::new(point_class)?,
-                ..Default::default()
-            };
-            result_collector.collect_one(point);
-        }
+        point_buffer
+            .get_attribute_range_ref::<u8>(0..points_in_chunk, &CLASSIFICATION)
+            .iter()
+            .enumerate()
+            .filter(|(_, &classification)| class == classification)
+            .for_each(|(idx, _)| {
+                let point = point_buffer.get_point::<Point>(idx);
+                result_collector.collect_one(point);
+            });
     }
     Ok(())
 }

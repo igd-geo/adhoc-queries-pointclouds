@@ -1,12 +1,12 @@
 use anyhow::{anyhow, Result};
-use las::{
-    point::{Format, Point},
-    Builder, Write, Writer,
-};
+use pasture_core::containers::InterleavedPointView;
+use pasture_io::{base::PointWriter, las::LASWriter, las_rs::{Builder, point::Format}};
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
 use std::path::PathBuf;
+
+use crate::points::Point;
 
 pub trait PointDumper {
     fn dump_points(&mut self, points: &[Point]) -> Result<()>;
@@ -69,16 +69,12 @@ impl PointDumper for FileDumper {
         self.file_index += 1;
 
         let mut builder = Builder::from((1, 4));
-        //TODO The format has to be determined from the input files. Also make sure that the points contain all relevant attributes!
-        builder.point_format = Format::new(0).unwrap();
+        builder.point_format = Format::new(2).unwrap();
         let header = builder.into_header().unwrap();
 
-        let file = File::create(file_path)?;
-        let mut writer = Writer::new(BufWriter::new(file), header)?;
-
-        for point in points {
-            writer.write(point.clone())?;
-        }
+        let buffer = InterleavedPointView::from_slice(points);
+        let mut writer = LASWriter::from_path_and_header(&file_path, header)?;
+        writer.write(&buffer)?;
 
         self.dumped_count += points.len();
 

@@ -1,15 +1,7 @@
 use anyhow::Result;
-use las::{
-    point::{Format, Point},
-    Builder, Write, Writer,
-};
-use nalgebra::Vector3;
-use std::fs::File;
-use std::io::BufWriter;
-use std::path::Path;
+use pasture_core::math::AABB;
 
-use crate::grid_sampling::SparseGrid;
-use crate::math::AABB;
+use crate::{grid_sampling::SparseGrid, points::Point};
 
 pub trait ResultCollector {
     fn collect_one(&mut self, point: Point);

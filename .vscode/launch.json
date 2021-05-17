@@ -21,13 +21,13 @@
             },
             "args": [
                 "-i",
-                "/home/pbormann/data/projects/progressive_indexing/experiments/file_formats/NavVisHQ-3rdFloor/navvis_m6_HQ3rdFloor.las",
+                "/Users/pbormann/data/geodata/pointclouds/datasets/navvis_m6_3rdFloor/navvis_m6_HQ3rdFloor.laz",
                 "--bounds",
                 "-23.108;-21.261;-10.029;28.588;27.123;5.959" ,
                 "--density",
                 "0.1",
                 "-o",
-                "/home/pbormann/data/tmp"
+                "/Users/pbormann/tmp"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
@@ -36,19 +36,34 @@
         },
         {
             "name": "Launch (Release)",
-            "type": "cppvsdbg",
+            "type": "lldb",
             "request": "launch",
-            "program": "${workspaceFolder}/target/release/io_tests.exe",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=io_tests",
+                    "--package=io_tests",
+                    "--release"
+                ],
+                "filter": {
+                    "name": "io_tests",
+                    "kind": "bin"
+                }
+            },
             "args": [
                 "-i",
-                "D:/data/geo/test_las",
+                "/Users/pbormann/data/geodata/pointclouds/datasets/navvis_m6_3rdFloor/navvis_m6_HQ3rdFloor.laz",
                 "--bounds",
-                "360500;5628150;90;360550;5628200;130"
+                "-23.108;-21.261;-10.029;28.588;27.123;5.959" ,
+                "--density",
+                "0.1",
+                "-o",
+                "/Users/pbormann/tmp"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
             "environment": [],
             "externalConsole": false
-        }
+        },
     ]
 }

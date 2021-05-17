@@ -1,7 +1,6 @@
-use crate::math::AABB;
+use crate::{points::Point};
 use anyhow::{anyhow, Result};
-use las::point::Point;
-use nalgebra::{Point3, Vector3};
+use pasture_core::{math::AABB, nalgebra::{Point3, Vector3, distance_squared}};
 use std::collections::HashMap;
 
 pub struct SparseGrid {
@@ -15,9 +14,9 @@ pub struct SparseGrid {
 impl SparseGrid {
     pub fn new(bounds: AABB<f64>, cell_size: f64) -> Result<Self> {
         let extent = Vector3::new(
-            bounds.max.x - bounds.min.x,
-            bounds.max.y - bounds.min.y,
-            bounds.max.z - bounds.min.z,
+            bounds.max().x - bounds.min().x,
+            bounds.max().y - bounds.min().y,
+            bounds.max().z - bounds.min().z,
         );
         let num_cells_per_dimension = Vector3::new(
             f64::ceil(extent.x / cell_size),
@@ -45,12 +44,12 @@ impl SparseGrid {
     }
 
     pub fn insert_point(&mut self, point: Point) -> bool {
-        let rx = (point.x - self.bounds.min.x) * self.dimensions.x as f64
-            / (self.bounds.max.x - self.bounds.min.x);
-        let ry = (point.y - self.bounds.min.y) * self.dimensions.y as f64
-            / (self.bounds.max.y - self.bounds.min.y);
-        let rz = (point.z - self.bounds.min.z) * self.dimensions.z as f64
-            / (self.bounds.max.z - self.bounds.min.z);
+        let rx = (point.position.x - self.bounds.min().x) * self.dimensions.x as f64
+            / (self.bounds.max().x - self.bounds.min().x);
+        let ry = (point.position.y - self.bounds.min().y) * self.dimensions.y as f64
+            / (self.bounds.max().y - self.bounds.min().y);
+        let rz = (point.position.z - self.bounds.min().z) * self.dimensions.z as f64
+            / (self.bounds.max().z - self.bounds.min().z);
 
         let cell_x = rx as u64;
         let cell_y = ry as u64;
@@ -73,17 +72,17 @@ impl SparseGrid {
             }
             Some(current_point) => {
                 let cell_center = Point3::new(
-                    (cell_x as f64 + 0.5) * self.cell_size + self.bounds.min.x,
-                    (cell_y as f64 + 0.5) * self.cell_size + self.bounds.min.y,
-                    (cell_z as f64 + 0.5) * self.cell_size + self.bounds.min.z,
+                    (cell_x as f64 + 0.5) * self.cell_size + self.bounds.min().x,
+                    (cell_y as f64 + 0.5) * self.cell_size + self.bounds.min().y,
+                    (cell_z as f64 + 0.5) * self.cell_size + self.bounds.min().z,
                 );
-                let cur_dist_sqr = nalgebra::distance_squared(
+                let cur_dist_sqr = distance_squared(
                     &cell_center,
-                    &Point3::new(current_point.x, current_point.y, current_point.z),
+                    &Point3::new(current_point.position.x, current_point.position.y, current_point.position.z),
                 );
-                let new_dist_sqr = nalgebra::distance_squared(
+                let new_dist_sqr = distance_squared(
                     &cell_center,
-                    &Point3::new(point.x, point.y, point.z),
+                    &Point3::new(point.position.x, point.position.y, point.position.z),
                 );
 
                 if new_dist_sqr < cur_dist_sqr {
@@ -111,13 +110,11 @@ mod tests {
 
     #[test]
     fn test_sparse_grid_add_one() -> Result<()> {
-        let bounds = AABB::new(Vector3::new(-5.0, -5.0, -5.0), Vector3::new(5.0, 5.0, 5.0));
+        let bounds = AABB::from_min_max(Point3::new(-5.0, -5.0, -5.0), Point3::new(5.0, 5.0, 5.0));
         let mut grid = SparseGrid::new(bounds, 1.0)?;
 
         grid.insert_point(Point {
-            x: -4.5,
-            y: -4.6,
-            z: -4.7,
+            position: Vector3::new(-4.5, -4.6, -4.7),
             ..Default::default()
         });
 
@@ -127,29 +124,25 @@ mod tests {
 
         let points = grid.points().collect::<Vec<_>>();
         assert_eq!(points.len(), 1);
-        assert_eq!(points[0].x, -4.5);
-        assert_eq!(points[0].y, -4.6);
-        assert_eq!(points[0].z, -4.7);
+        assert_eq!(points[0].position.x, -4.5);
+        assert_eq!(points[0].position.y, -4.6);
+        assert_eq!(points[0].position.z, -4.7);
 
         Ok(())
     }
 
     #[test]
     fn test_sparse_grid_add_multiple_in_different_cells() -> Result<()> {
-        let bounds = AABB::new(Vector3::new(-5.0, -5.0, -5.0), Vector3::new(5.0, 5.0, 5.0));
+        let bounds = AABB::from_min_max(Point3::new(-5.0, -5.0, -5.0), Point3::new(5.0, 5.0, 5.0));
         let mut grid = SparseGrid::new(bounds, 1.0)?;
 
         grid.insert_point(Point {
-            x: -4.5,
-            y: -4.6,
-            z: -4.7,
+            position: Vector3::new(-4.5, -4.6, -4.7),
             ..Default::default()
         });
 
         grid.insert_point(Point {
-            x: -3.5,
-            y: -4.5,
-            z: -4.4,
+            position: Vector3::new(-3.5, -4.5, -4.4),
             ..Default::default()
         });
 
@@ -161,33 +154,28 @@ mod tests {
         let points = grid.points().collect::<Vec<_>>();
         assert_eq!(points.len(), 2);
 
-        assert_eq!(points[0].x, -4.5);
-        assert_eq!(points[0].y, -4.6);
-        assert_eq!(points[0].z, -4.7);
+        assert_eq!(points[0].position.x, -4.5);
+        assert_eq!(points[0].position.y, -4.6);
+        assert_eq!(points[0].position.z, -4.7);
 
-        assert_eq!(points[1].x, -3.5);
-        assert_eq!(points[1].y, -4.5);
-        assert_eq!(points[1].z, -4.4);
+        assert_eq!(points[1].position.x, -3.5);
+        assert_eq!(points[1].position.y, -4.5);
+        assert_eq!(points[1].position.z, -4.4);
 
         Ok(())
     }
 
     #[test]
     fn test_sparse_grid_add_multiple_in_same_cell() -> Result<()> {
-        let bounds = AABB::new(Vector3::new(-5.0, -5.0, -5.0), Vector3::new(5.0, 5.0, 5.0));
+        let bounds = AABB::from_min_max(Point3::new(-5.0, -5.0, -5.0), Point3::new(5.0, 5.0, 5.0));
         let mut grid = SparseGrid::new(bounds, 1.0)?;
 
         grid.insert_point(Point {
-            x: -4.8,
-            y: -4.6,
-            z: -4.7,
+            position: Vector3::new(-4.8, -4.6, -4.7),
             ..Default::default()
         });
-
         grid.insert_point(Point {
-            x: -4.5,
-            y: -4.4,
-            z: -4.6,
+            position: Vector3::new(-4.5, -4.4, -4.6),
             ..Default::default()
         });
 
@@ -198,9 +186,9 @@ mod tests {
         let points = grid.points().collect::<Vec<_>>();
         assert_eq!(points.len(), 1);
 
-        assert_eq!(points[0].x, -4.5);
-        assert_eq!(points[0].y, -4.4);
-        assert_eq!(points[0].z, -4.6);
+        assert_eq!(points[0].position.x, -4.5);
+        assert_eq!(points[0].position.y, -4.4);
+        assert_eq!(points[0].position.z, -4.6);
 
         Ok(())
     }

@@ -4,18 +4,19 @@ mod collect_points;
 mod dump_points;
 mod grid_sampling;
 mod las;
-mod math;
 mod search;
+mod points;
 
 use crate::collect_points::ResultCollector;
 use anyhow::{anyhow, Context, Result};
 use clap::{value_t, App, Arg};
 use memmap::MmapOptions;
-use nalgebra::Vector3;
-use pointstream::pointcloud::PointSource;
+use pasture_core::{math::AABB, nalgebra::Point3};
+use pasture_io::base::{IOFactory, PointReadAndSeek};
+use points::{LASTReader, LAZERSource};
 use rayon::prelude::*;
 use rayon::prelude::*;
-use std::convert::TryInto;
+use std::{convert::TryInto, fs::File};
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -58,7 +59,7 @@ fn get_all_input_files(input_path: &Path) -> Result<Vec<PathBuf>> {
     ))
 }
 
-fn parse_aabb(aabb_str: &str) -> Result<math::AABB<f64>> {
+fn parse_aabb(aabb_str: &str) -> Result<AABB<f64>> {
     let components: Vec<&str> = aabb_str.split(";").collect();
     if components.len() != 6 {
         return Err(anyhow!("Could not parse AABB from string \"{}\"", aabb_str));
@@ -79,13 +80,13 @@ fn parse_aabb(aabb_str: &str) -> Result<math::AABB<f64>> {
         }
     };
 
-    Ok(math::AABB::new(
-        Vector3::new(
+    Ok(AABB::from_min_max(
+        Point3::new(
             components_as_floats[0],
             components_as_floats[1],
             components_as_floats[2],
         ),
-        Vector3::new(
+        Point3::new(
             components_as_floats[3],
             components_as_floats[4],
             components_as_floats[5],
@@ -93,22 +94,29 @@ fn parse_aabb(aabb_str: &str) -> Result<math::AABB<f64>> {
     ))
 }
 
-fn get_total_bounds(files : &[PathBuf]) -> Result<math::AABB<f64>> {
-    let factory = pointstream::pointcloud::PointcloudFactory::new();
-    let file_bounds = files.iter().map(|f| -> Result<math::AABB<f64>> {
-        let mut source = factory.create_point_source(&f)?;
-        Ok(source.metadata().bounds().into())
+fn get_total_bounds(files : &[PathBuf]) -> Result<AABB<f64>> {
+    let mut factory = IOFactory::default();
+    factory.register_reader_for_extension("last", |path| -> Result<Box<dyn PointReadAndSeek>> {
+        let file = File::open(path)?;
+        let reader = LASTReader::from(file)?;
+        let boxed = Box::new(reader);
+        Ok(boxed)
+    });
+    factory.register_reader_for_extension("lazer", |path| -> Result<Box<dyn PointReadAndSeek>> {
+        let file = File::open(path)?;
+        let reader = LAZERSource::from(file)?;
+        let boxed = Box::new(reader);
+        Ok(boxed)
+    });
+
+    let file_bounds = files.iter().map(|f| -> Result<AABB<f64>> {
+        let mut source = factory.make_reader(f)?;
+        Ok(source.get_metadata().bounds().unwrap().into())
     }).collect::<Result<Vec<_>, _>>()?;
 
-    let mut total_bounds = math::AABB::new(Vector3::new(f64::MAX, f64::MAX, f64::MAX), Vector3::new(f64::MIN, f64::MIN, f64::MIN));
+    let mut total_bounds = AABB::from_min_max_unchecked(Point3::new(f64::MAX, f64::MAX, f64::MAX), Point3::new(f64::MIN, f64::MIN, f64::MIN));
     for other_bounds in file_bounds.iter() {
-        total_bounds.min.x = pointstream::math::fmin(total_bounds.min.x, other_bounds.min.x);
-        total_bounds.min.y = pointstream::math::fmin(total_bounds.min.y, other_bounds.min.y);
-        total_bounds.min.z = pointstream::math::fmin(total_bounds.min.z, other_bounds.min.z);
-
-        total_bounds.max.x = pointstream::math::fmin(total_bounds.max.x, other_bounds.max.x);
-        total_bounds.max.y = pointstream::math::fmin(total_bounds.max.y, other_bounds.max.y);
-        total_bounds.max.z = pointstream::math::fmin(total_bounds.max.z, other_bounds.max.z);
+        total_bounds = AABB::union(&total_bounds, other_bounds);
     }
 
     Ok(total_bounds)
@@ -257,7 +265,7 @@ fn main() -> Result<()> {
 
     let collector_factory : CollectorFactoryFn = if let Some(density) = maybe_density {
         let cell_size = density;
-        let bounds : math::AABB::<f64> = if let Some(ref bounds) = maybe_bounds {
+        let bounds : AABB<f64> = if let Some(ref bounds) = maybe_bounds {
             bounds.clone()
         } else {
             get_total_bounds(&input_files)?
