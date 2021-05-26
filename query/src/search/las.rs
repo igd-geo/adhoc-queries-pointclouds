@@ -1,9 +1,19 @@
-use crate::{collect_points::ResultCollector, points::Point};
+use crate::collect_points::ResultCollector;
 use anyhow::{anyhow, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use memmap::MmapOptions;
-use pasture_core::{containers::{InterleavedPointBufferExt, InterleavedVecPointStorage}, layout::PointType, math::AABB, nalgebra::{Point3, Vector3}};
-use pasture_io::{las::LASReader, las_rs::{Header, raw}, base::PointReader};
+use pasture_core::{
+    containers::{InterleavedPointBufferExt, InterleavedVecPointStorage},
+    layout::PointType,
+    math::AABB,
+    nalgebra::{Point3, Vector3},
+};
+use pasture_io::{
+    base::PointReader,
+    las::LASReader,
+    las_rs::{raw, Header},
+};
+use readers::Point;
 use std::fs::File;
 use std::io::SeekFrom;
 use std::io::{Cursor, Seek};
@@ -92,9 +102,11 @@ pub fn search_las_file_by_bounds_optimized<P: AsRef<Path>>(
         }
 
         result_collector.collect_one(Point {
-            position: Vector3::new((point_x as f64 * raw_header.x_scale_factor) + raw_header.x_offset,
-            (point_y as f64 * raw_header.y_scale_factor) + raw_header.y_offset,
-            (point_z as f64 * raw_header.z_scale_factor) + raw_header.z_offset),
+            position: Vector3::new(
+                (point_x as f64 * raw_header.x_scale_factor) + raw_header.x_offset,
+                (point_y as f64 * raw_header.y_scale_factor) + raw_header.y_offset,
+                (point_z as f64 * raw_header.z_scale_factor) + raw_header.z_offset,
+            ),
             ..Default::default()
         });
     }
@@ -111,11 +123,17 @@ pub fn search_las_file_by_bounds<P: AsRef<Path>>(
     let mut reader = LASReader::from_read(mmap, false)?;
 
     let metadata = reader.get_metadata().clone();
-    if !metadata.bounds().expect("No bounds found in LAS file").intersects(&bounds) {
+    if !metadata
+        .bounds()
+        .expect("No bounds found in LAS file")
+        .intersects(&bounds)
+    {
         return Ok(());
     }
 
-    let number_of_points = metadata.number_of_points().expect("No number of points found in LAS file");
+    let number_of_points = metadata
+        .number_of_points()
+        .expect("No number of points found in LAS file");
 
     // Read in chunks of fixed size
     let chunk_size = 65536; //24 bytes per point ^= ~1.5MiB
@@ -177,10 +195,12 @@ pub fn search_las_file_by_classification_optimized<P: AsRef<Path>>(
         let point_y = reader.read_i32::<LittleEndian>()?;
         let point_z = reader.read_i32::<LittleEndian>()?;
 
-        result_collector.collect_one( Point {
-            position: Vector3::new((point_x as f64 * raw_header.x_scale_factor) + raw_header.x_offset,
-            (point_y as f64 * raw_header.y_scale_factor) + raw_header.y_offset,
-            (point_z as f64 * raw_header.z_scale_factor) + raw_header.z_offset),
+        result_collector.collect_one(Point {
+            position: Vector3::new(
+                (point_x as f64 * raw_header.x_scale_factor) + raw_header.x_offset,
+                (point_y as f64 * raw_header.y_scale_factor) + raw_header.y_offset,
+                (point_z as f64 * raw_header.z_scale_factor) + raw_header.z_offset,
+            ),
             classification: classification,
             ..Default::default()
         });
@@ -198,7 +218,9 @@ pub fn search_las_file_by_classification<P: AsRef<Path>>(
     let mut reader = LASReader::from_read(mmap, false)?;
 
     let metadata = reader.get_metadata().clone();
-    let number_of_points = metadata.number_of_points().expect("No number of points found in LAS file");
+    let number_of_points = metadata
+        .number_of_points()
+        .expect("No number of points found in LAS file");
 
     // Read in chunks of fixed size
     let chunk_size = 65536; //24 bytes per point ^= ~1.5MiB
@@ -272,9 +294,11 @@ pub fn search_las_file_by_time_range_optimized<P: AsRef<Path>>(
         let point_z = reader.read_i32::<LittleEndian>()?;
 
         result_collector.collect_one(Point {
-            position: Vector3::new((point_x as f64 * raw_header.x_scale_factor) + raw_header.x_offset,
-            (point_y as f64 * raw_header.y_scale_factor) + raw_header.y_offset,
-            (point_z as f64 * raw_header.z_scale_factor) + raw_header.z_offset),
+            position: Vector3::new(
+                (point_x as f64 * raw_header.x_scale_factor) + raw_header.x_offset,
+                (point_y as f64 * raw_header.y_scale_factor) + raw_header.y_offset,
+                (point_z as f64 * raw_header.z_scale_factor) + raw_header.z_offset,
+            ),
             ..Default::default()
         });
     }

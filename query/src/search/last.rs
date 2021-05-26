@@ -1,9 +1,21 @@
-use crate::{collect_points::ResultCollector, points::{LASTReader, Point}};
+use crate::collect_points::ResultCollector;
 use anyhow::{anyhow, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use memmap::MmapOptions;
-use pasture_core::{math::AABB, nalgebra::{Point3, Vector3}};
-use pasture_io::{base::PointReader, las_rs::{Header, raw}};
+use pasture_core::{
+    containers::{
+        PerAttributePointBufferExt, PerAttributeVecPointStorage, PointBufferExt,
+        PointBufferWriteable,
+    },
+    layout::{attributes::POSITION_3D, PointType},
+    math::AABB,
+    nalgebra::{Point3, Vector3},
+};
+use pasture_io::{
+    base::PointReader,
+    las_rs::{raw, Header},
+};
+use readers::{LASTReader, Point};
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::SeekFrom;
@@ -98,9 +110,11 @@ pub fn search_last_file_by_bounds_optimized<P: AsRef<Path>>(
         }
 
         result_collector.collect_one(Point {
-            position: Vector3::new((point_x as f64 * raw_header.x_scale_factor) + raw_header.x_offset,
-            (point_y as f64 * raw_header.y_scale_factor) + raw_header.y_offset,
-            (point_z as f64 * raw_header.z_scale_factor) + raw_header.z_offset),
+            position: Vector3::new(
+                (point_x as f64 * raw_header.x_scale_factor) + raw_header.x_offset,
+                (point_y as f64 * raw_header.y_scale_factor) + raw_header.y_offset,
+                (point_z as f64 * raw_header.z_scale_factor) + raw_header.z_offset,
+            ),
             ..Default::default()
         });
     }
@@ -117,38 +131,39 @@ pub fn search_last_file_by_bounds<P: AsRef<Path>>(
     let mut reader = LASTReader::from(mmap)?;
 
     let metadata = reader.get_metadata();
-    let num_points = metadata.number_of_points().expect("No points count found in LAST file");
-    if !metadata.bounds().expect("No bounds found in LAST file").intersects(&bounds) {
+    let num_points = metadata
+        .number_of_points()
+        .expect("No points count found in LAST file");
+    if !metadata
+        .bounds()
+        .expect("No bounds found in LAST file")
+        .intersects(&bounds)
+    {
         return Ok(());
     }
 
-    todo!()
-
     // Read in chunks of fixed size
-    // let chunk_size = 65536; //24 bytes per point ^= ~1.5MiB
-    // let mut point_buffer = LinearPointBuffer::new(chunk_size, PointAttributes::Position);
+    let chunk_size = 1_000_000;
+    let mut point_buffer = PerAttributeVecPointStorage::with_capacity(chunk_size, Point::layout());
 
-    // let num_chunks = (metadata.point_count() + chunk_size - 1) / chunk_size;
-    // for idx in 0..num_chunks {
-    //     let points_in_chunk = usize::min(chunk_size, metadata.point_count() - (idx * chunk_size));
-    //     point_source.read_into(&mut point_buffer, points_in_chunk)?;
+    let num_chunks = (num_points + chunk_size - 1) / chunk_size;
+    for idx in 0..num_chunks {
+        let points_in_chunk = usize::min(chunk_size, num_points - (idx * chunk_size));
+        reader.read_into(&mut point_buffer, points_in_chunk)?;
 
-    //     point_buffer
-    //         .positions()
-    //         .iter()
-    //         .take(points_in_chunk)
-    //         .filter(|pos| bounds.contains(pos))
-    //         .for_each(|pos| {
-    //             let point = las::point::Point {
-    //                 x: pos.x,
-    //                 y: pos.y,
-    //                 z: pos.z,
-    //                 ..Default::default()
-    //             };
-    //             result_collector.collect_one(point);
-    //         });
-    // }
-    // Ok(())
+        point_buffer
+            .get_attribute_range_ref::<Vector3<f64>>(0..points_in_chunk, &POSITION_3D)
+            .iter()
+            .enumerate()
+            .filter(|(_, pos)| bounds.contains(&(**pos).into()))
+            .for_each(|(idx, _)| {
+                let point = point_buffer.get_point::<Point>(idx);
+                result_collector.collect_one(point);
+            });
+
+        point_buffer.clear();
+    }
+    Ok(())
 }
 
 pub fn search_last_file_by_classification_optimized<P: AsRef<Path>>(
@@ -158,7 +173,9 @@ pub fn search_last_file_by_classification_optimized<P: AsRef<Path>>(
 ) -> Result<()> {
     let mut reader = open_file_reader(&path)?;
 
-    let raw_header = parse_las_header(&mut reader)?;
+    let mut raw_header = parse_las_header(&mut reader)?;
+    // See comment in LASTReader::from
+    raw_header.point_data_record_format &= 0b1111;
     let header = Header::from_raw(raw_header.clone())?;
 
     let offset_to_classification_in_point = match raw_header.point_data_record_format {
@@ -196,9 +213,11 @@ pub fn search_last_file_by_classification_optimized<P: AsRef<Path>>(
         let point_z = reader.read_i32::<LittleEndian>()?;
 
         result_collector.collect_one(Point {
-            position: Vector3::new((point_x as f64 * raw_header.x_scale_factor) + raw_header.x_offset,
-            (point_y as f64 * raw_header.y_scale_factor) + raw_header.y_offset,
-            (point_z as f64 * raw_header.z_scale_factor) + raw_header.z_offset),
+            position: Vector3::new(
+                (point_x as f64 * raw_header.x_scale_factor) + raw_header.x_offset,
+                (point_y as f64 * raw_header.y_scale_factor) + raw_header.y_offset,
+                (point_z as f64 * raw_header.z_scale_factor) + raw_header.z_offset,
+            ),
             classification: classification,
             ..Default::default()
         });

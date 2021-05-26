@@ -1,9 +1,21 @@
-use crate::{collect_points::ResultCollector, points::{LAZERSource, Point}};
+use crate::collect_points::ResultCollector;
 use anyhow::{anyhow, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use memmap::MmapOptions;
-use pasture_core::{containers::{PerAttributePointBufferExt, PerAttributeVecPointStorage, PointBufferExt}, layout::{PointType, attributes::{CLASSIFICATION, POSITION_3D}}, math::AABB, nalgebra::{Point3, Vector3}};
+use pasture_core::{
+    containers::{
+        PerAttributePointBufferExt, PerAttributeVecPointStorage, PointBufferExt,
+        PointBufferWriteable,
+    },
+    layout::{
+        attributes::{CLASSIFICATION, POSITION_3D},
+        PointType,
+    },
+    math::AABB,
+    nalgebra::{Point3, Vector3},
+};
 use pasture_io::{base::PointReader, las_rs::raw};
+use readers::{LAZERSource, Point};
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::SeekFrom;
@@ -36,8 +48,14 @@ pub fn search_lazer_file_by_bounds<P: AsRef<Path>>(
     let mut reader = LAZERSource::from(mmap)?;
 
     let metadata = reader.get_metadata();
-    let num_points = metadata.number_of_points().expect("No number of points found in LAZER file");
-    if !metadata.bounds().expect("No bounds found in LAZER file").intersects(&bounds) {
+    let num_points = metadata
+        .number_of_points()
+        .expect("No number of points found in LAZER file");
+    if !metadata
+        .bounds()
+        .expect("No bounds found in LAZER file")
+        .intersects(&bounds)
+    {
         return Ok(());
     }
 
@@ -54,13 +72,13 @@ pub fn search_lazer_file_by_bounds<P: AsRef<Path>>(
             .get_attribute_range_ref::<Vector3<f64>>(0..points_in_chunk, &POSITION_3D)
             .iter()
             .enumerate()
-            .filter(|(_, pos)| {
-                bounds.contains(&(**pos).into())
-            })
+            .filter(|(_, pos)| bounds.contains(&(**pos).into()))
             .for_each(|(idx, _)| {
                 let point = point_buffer.get_point::<Point>(idx);
                 result_collector.collect_one(point);
             });
+
+        point_buffer.clear();
     }
     Ok(())
 }
@@ -75,7 +93,9 @@ pub fn search_lazer_file_by_classification<P: AsRef<Path>>(
     let mut reader = LAZERSource::from(mmap)?;
 
     let metadata = reader.get_metadata();
-    let num_points = metadata.number_of_points().expect("No number of points found in LAZER file");
+    let num_points = metadata
+        .number_of_points()
+        .expect("No number of points found in LAZER file");
 
     // Read in chunks equal to the block size
     let chunk_size = reader.block_size() as usize;

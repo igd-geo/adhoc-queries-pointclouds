@@ -11,23 +11,28 @@
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=io_tests",
-                    "--package=io_tests"
+                    "--bin=query",
+                    "--package=query"
                 ],
                 "filter": {
-                    "name": "io_tests",
+                    "name": "query",
                     "kind": "bin"
                 }
             },
             "args": [
                 "-i",
-                "/Users/pbormann/data/geodata/pointclouds/datasets/navvis_m6_3rdFloor/navvis_m6_HQ3rdFloor.laz",
+                //"/Users/pbormann/data/geodata/pointclouds/datasets/navvis_m6_3rdFloor/navvis_m6_HQ3rdFloor.laz",
+                "/Users/pbormann/data/projects/progressive_indexing/experiment_data/ca13/last",
                 "--bounds",
-                "-23.108;-21.261;-10.029;28.588;27.123;5.959" ,
-                "--density",
-                "0.1",
-                "-o",
-                "/Users/pbormann/tmp"
+                "695000.0;3917500.0;43.0;696500.0;3920000.0;280.0" ,
+                "--optimized",
+                "--parallel",
+                // "--class",
+                // "6"
+                //"--density",
+                //"0.1",
+                //"-o",
+                //"/Users/pbormann/tmp"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
@@ -41,24 +46,30 @@
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=io_tests",
-                    "--package=io_tests",
+                    "--bin=query",
+                    "--package=query",
                     "--release"
                 ],
                 "filter": {
-                    "name": "io_tests",
+                    "name": "query",
                     "kind": "bin"
                 }
             },
             "args": [
                 "-i",
-                "/Users/pbormann/data/geodata/pointclouds/datasets/navvis_m6_3rdFloor/navvis_m6_HQ3rdFloor.laz",
+                //"/Users/pbormann/data/geodata/pointclouds/datasets/navvis_m6_3rdFloor/navvis_m6_HQ3rdFloor.laz",
+                "/Users/pbormann/data/projects/progressive_indexing/experiment_data/ca13/last",
                 "--bounds",
-                "-23.108;-21.261;-10.029;28.588;27.123;5.959" ,
-                "--density",
-                "0.1",
-                "-o",
-                "/Users/pbormann/tmp"
+                "665000.0;3910000.0;0.0;705000.0;3950000.0;480.0" ,
+                //"664085.14;3889087.89;5.7;736910.93;3946652.31;693.55",
+                "--optimized",
+                "--parallel",
+                // "--class",
+                // "6"
+                //"--density",
+                //"0.1",
+                //"-o",
+                //"/Users/pbormann/tmp"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

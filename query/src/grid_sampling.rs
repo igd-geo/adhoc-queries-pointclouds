@@ -1,6 +1,9 @@
-use crate::{points::Point};
 use anyhow::{anyhow, Result};
-use pasture_core::{math::AABB, nalgebra::{Point3, Vector3, distance_squared}};
+use pasture_core::{
+    math::AABB,
+    nalgebra::{distance_squared, Point3, Vector3},
+};
+use readers::Point;
 use std::collections::HashMap;
 
 pub struct SparseGrid {
@@ -78,7 +81,11 @@ impl SparseGrid {
                 );
                 let cur_dist_sqr = distance_squared(
                     &cell_center,
-                    &Point3::new(current_point.position.x, current_point.position.y, current_point.position.z),
+                    &Point3::new(
+                        current_point.position.x,
+                        current_point.position.y,
+                        current_point.position.z,
+                    ),
                 );
                 let new_dist_sqr = distance_squared(
                     &cell_center,

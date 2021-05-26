@@ -1,12 +1,16 @@
 use anyhow::{anyhow, Result};
 use pasture_core::containers::InterleavedPointView;
-use pasture_io::{base::PointWriter, las::LASWriter, las_rs::{Builder, point::Format}};
+use pasture_io::{
+    base::PointWriter,
+    las::LASWriter,
+    las_rs::{point::Format, Builder},
+};
 use std::fs::File;
 use std::io::BufWriter;
 use std::path::Path;
 use std::path::PathBuf;
 
-use crate::points::Point;
+use readers::Point;
 
 pub trait PointDumper {
     fn dump_points(&mut self, points: &[Point]) -> Result<()>;
@@ -65,10 +69,10 @@ impl PointDumper for FileDumper {
         }
         let file_path = self
             .root_dir
-            .join(format!("matching_points_{}.laz", self.file_index));
+            .join(format!("matching_points_{}.las", self.file_index));
         self.file_index += 1;
 
-        let mut builder = Builder::from((1, 4));
+        let mut builder = Builder::from((1, 2));
         builder.point_format = Format::new(2).unwrap();
         let header = builder.into_header().unwrap();
 

@@ -1,7 +1,8 @@
 use anyhow::Result;
 use pasture_core::math::AABB;
 
-use crate::{grid_sampling::SparseGrid, points::Point};
+use crate::grid_sampling::SparseGrid;
+use readers::Point;
 
 pub trait ResultCollector {
     fn collect_one(&mut self, point: Point);

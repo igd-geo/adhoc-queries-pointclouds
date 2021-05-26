@@ -1,10 +1,15 @@
-use crate::{collect_points::ResultCollector, points::Point};
+use crate::collect_points::ResultCollector;
 use crate::search::{search_las_file_by_bounds, search_las_file_by_classification};
 use anyhow::{anyhow, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use memmap::MmapOptions;
-use pasture_core::{containers::{InterleavedPointBufferExt, InterleavedVecPointStorage, PointBufferWriteable}, layout::PointType, math::AABB};
+use pasture_core::{
+    containers::{InterleavedPointBufferExt, InterleavedVecPointStorage, PointBufferWriteable},
+    layout::PointType,
+    math::AABB,
+};
 use pasture_io::{base::PointReader, las::LASReader};
+use readers::Point;
 use std::convert::TryInto;
 use std::fs::File;
 use std::io::SeekFrom;
@@ -38,11 +43,17 @@ pub fn search_laz_file_by_bounds_optimized<P: AsRef<Path>>(
     let mut reader = LASReader::from_read(mmap, true)?;
 
     let metadata = reader.get_metadata().clone();
-    if !metadata.bounds().expect("No bounds found in LAS file").intersects(&bounds) {
+    if !metadata
+        .bounds()
+        .expect("No bounds found in LAS file")
+        .intersects(&bounds)
+    {
         return Ok(());
     }
 
-    let number_of_points = metadata.number_of_points().expect("No number of points found in LAS file");
+    let number_of_points = metadata
+        .number_of_points()
+        .expect("No number of points found in LAS file");
 
     // Read in chunks of fixed size
     let chunk_size = 65536; //24 bytes per point ^= ~1.5MiB
@@ -87,7 +98,9 @@ pub fn search_laz_file_by_classification_optimized<P: AsRef<Path>>(
     let mut reader = LASReader::from_read(mmap, true)?;
 
     let metadata = reader.get_metadata().clone();
-    let number_of_points = metadata.number_of_points().expect("No number of points found in LAS file");
+    let number_of_points = metadata
+        .number_of_points()
+        .expect("No number of points found in LAS file");
 
     // Read in chunks of fixed size
     let chunk_size = 65536; //24 bytes per point ^= ~1.5MiB

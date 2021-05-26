@@ -5,18 +5,17 @@ mod dump_points;
 mod grid_sampling;
 mod las;
 mod search;
-mod points;
 
 use crate::collect_points::ResultCollector;
 use anyhow::{anyhow, Context, Result};
 use clap::{value_t, App, Arg};
 use memmap::MmapOptions;
 use pasture_core::{math::AABB, nalgebra::Point3};
-use pasture_io::base::{IOFactory, PointReadAndSeek};
-use points::{LASTReader, LAZERSource};
+use pasture_io::base::{IOFactory, PointReadAndSeek, PointReader};
+use readers::{LASTReader, LAZERSource};
 use rayon::prelude::*;
 use rayon::prelude::*;
-use std::{convert::TryInto, fs::File};
+use std::{convert::TryInto, fs::File, io::BufReader};
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -185,6 +184,12 @@ fn run_search_parallel(
     Ok(())
 }
 
+fn is_valid_file(file: &Path) -> bool {
+    file.extension().map(|ex| {
+        ex == "las" || ex == "laz" || ex == "last" || ex == "lazer"
+    }).unwrap_or(false)
+}
+
 fn main() -> Result<()> {
     // {
     //     let dirs = get_all_input_files(Path::new(
@@ -233,9 +238,17 @@ fn main() -> Result<()> {
                           .get_matches();
 
     let input_dir = Path::new(matches.value_of("INPUT").unwrap());
-    let input_files = get_all_input_files(input_dir)?;
+    let input_files = get_all_input_files(input_dir)?.into_iter().filter(|f| is_valid_file(&f)).collect::<Vec<_>>();
 
     let maybe_output_dir = matches.value_of("OUTPUT").map(|p| Path::new(p));
+
+    let all_bounds = input_files.iter().map(|f| -> Result<AABB<f64>> {
+        let reader = LASTReader::from(BufReader::new(File::open(f)?))?;
+        Ok(reader.get_metadata().bounds().unwrap().clone())
+    }).collect::<Result<Vec<_>, _>>()?;
+    let combined_bounds = all_bounds.into_iter().reduce(|a,b| AABB::union(&a,&b)).unwrap();
+    println!("{:?}", combined_bounds);
+
 
     let total_file_size: u64 = input_files
         .iter()
