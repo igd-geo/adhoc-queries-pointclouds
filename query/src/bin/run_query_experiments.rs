@@ -115,7 +115,11 @@ fn execute_class_query<P: AsRef<Path>>(path_to_dataset: P, class: u8) -> Result<
 }
 
 fn run_aabb_experiments<P: AsRef<Path>>(in_path: P, num_runs: usize) -> Result<()> {
-    let file_extensions = vec!["las", "laz", "last", "lazer"];
+    let file_extensions = vec![
+        "las", //"laz",
+        "last",
+        //"lazer"
+    ];
 
     let aabb_navvis_s = AABB::from_min_max(Point3::new(0.0, 0.0, 0.0), Point3::new(2.0, 2.0, 2.0));
     let aabb_navvis_l =
@@ -162,79 +166,79 @@ fn run_aabb_experiments<P: AsRef<Path>>(in_path: P, num_runs: usize) -> Result<(
     }
 
     let aabb_experiment_inputs = vec![
-        // AABBExperimentInput {
-        //     dataset_name: "navvis3",
-        //     bounds_name: "s",
-        //     bounds: aabb_navvis_s.clone(),
-        //     density: None,
-        // },
-        // AABBExperimentInput {
-        //     dataset_name: "navvis3",
-        //     bounds_name: "s",
-        //     bounds: aabb_navvis_s.clone(),
-        //     density: Some(0.1),
-        // },
-        // AABBExperimentInput {
-        //     dataset_name: "navvis3",
-        //     bounds_name: "l",
-        //     bounds: aabb_navvis_l.clone(),
-        //     density: None,
-        // },
-        // AABBExperimentInput {
-        //     dataset_name: "navvis3",
-        //     bounds_name: "l",
-        //     bounds: aabb_navvis_l.clone(),
-        //     density: Some(0.1),
-        // },
-        // AABBExperimentInput {
-        //     dataset_name: "navvis3",
-        //     bounds_name: "xl",
-        //     bounds: aabb_navvis_xl.clone(),
-        //     density: None,
-        // },
-        // AABBExperimentInput {
-        //     dataset_name: "navvis3",
-        //     bounds_name: "xl",
-        //     bounds: aabb_navvis_xl.clone(),
-        //     density: Some(0.1),
-        // },
-        // //doc
-        // AABBExperimentInput {
-        //     dataset_name: "doc",
-        //     bounds_name: "s",
-        //     bounds: aabb_doc_s.clone(),
-        //     density: None,
-        // },
-        // AABBExperimentInput {
-        //     dataset_name: "doc",
-        //     bounds_name: "s",
-        //     bounds: aabb_doc_s.clone(),
-        //     density: Some(25.0),
-        // },
-        // AABBExperimentInput {
-        //     dataset_name: "doc",
-        //     bounds_name: "l",
-        //     bounds: aabb_doc_l.clone(),
-        //     density: None,
-        // },
-        // AABBExperimentInput {
-        //     dataset_name: "doc",
-        //     bounds_name: "l",
-        //     bounds: aabb_doc_l.clone(),
-        //     density: Some(25.0),
-        // },
-        // AABBExperimentInput {
-        //     dataset_name: "doc",
-        //     bounds_name: "xl",
-        //     bounds: aabb_doc_xl.clone(),
-        //     density: None,
-        // },
-        // AABBExperimentInput {
-        //     dataset_name: "doc",
-        //     bounds_name: "xl",
-        //     bounds: aabb_doc_xl.clone(),
-        //     density: Some(25.0),
-        // },
+        AABBExperimentInput {
+            dataset_name: "navvis3",
+            bounds_name: "s",
+            bounds: aabb_navvis_s.clone(),
+            density: None,
+        },
+        AABBExperimentInput {
+            dataset_name: "navvis3",
+            bounds_name: "s",
+            bounds: aabb_navvis_s.clone(),
+            density: Some(0.1),
+        },
+        AABBExperimentInput {
+            dataset_name: "navvis3",
+            bounds_name: "l",
+            bounds: aabb_navvis_l.clone(),
+            density: None,
+        },
+        AABBExperimentInput {
+            dataset_name: "navvis3",
+            bounds_name: "l",
+            bounds: aabb_navvis_l.clone(),
+            density: Some(0.1),
+        },
+        AABBExperimentInput {
+            dataset_name: "navvis3",
+            bounds_name: "xl",
+            bounds: aabb_navvis_xl.clone(),
+            density: None,
+        },
+        AABBExperimentInput {
+            dataset_name: "navvis3",
+            bounds_name: "xl",
+            bounds: aabb_navvis_xl.clone(),
+            density: Some(0.1),
+        },
+        //doc
+        AABBExperimentInput {
+            dataset_name: "doc",
+            bounds_name: "s",
+            bounds: aabb_doc_s.clone(),
+            density: None,
+        },
+        AABBExperimentInput {
+            dataset_name: "doc",
+            bounds_name: "s",
+            bounds: aabb_doc_s.clone(),
+            density: Some(25.0),
+        },
+        AABBExperimentInput {
+            dataset_name: "doc",
+            bounds_name: "l",
+            bounds: aabb_doc_l.clone(),
+            density: None,
+        },
+        AABBExperimentInput {
+            dataset_name: "doc",
+            bounds_name: "l",
+            bounds: aabb_doc_l.clone(),
+            density: Some(25.0),
+        },
+        AABBExperimentInput {
+            dataset_name: "doc",
+            bounds_name: "xl",
+            bounds: aabb_doc_xl.clone(),
+            density: None,
+        },
+        AABBExperimentInput {
+            dataset_name: "doc",
+            bounds_name: "xl",
+            bounds: aabb_doc_xl.clone(),
+            density: Some(25.0),
+        },
         //ca13
         AABBExperimentInput {
             dataset_name: "ca13",
@@ -312,8 +316,9 @@ fn run_aabb_experiments<P: AsRef<Path>>(in_path: P, num_runs: usize) -> Result<(
 
 fn run_class_experiments<P: AsRef<Path>>(in_path: P, num_runs: usize) -> Result<()> {
     let file_extensions = vec![
-        "las", "laz",
-        //"last", "lazer",
+        "las", //"laz",
+        "last",
+        //"lazer",
     ];
 
     struct ClassExperimentInput {
@@ -323,21 +328,21 @@ fn run_class_experiments<P: AsRef<Path>>(in_path: P, num_runs: usize) -> Result<
     }
 
     let experiment_data = vec![
-        // ClassExperimentInput {
-        //     dataset_name: "doc",
-        //     class_name: "building",
-        //     class: 6,
-        // },
-        // ClassExperimentInput {
-        //     dataset_name: "doc",
-        //     class_name: "noclass",
-        //     class: 19,
-        // },
-        // ClassExperimentInput {
-        //     dataset_name: "ca13",
-        //     class_name: "building",
-        //     class: 6,
-        // },
+        ClassExperimentInput {
+            dataset_name: "doc",
+            class_name: "building",
+            class: 6,
+        },
+        ClassExperimentInput {
+            dataset_name: "doc",
+            class_name: "noclass",
+            class: 19,
+        },
+        ClassExperimentInput {
+            dataset_name: "ca13",
+            class_name: "building",
+            class: 6,
+        },
         ClassExperimentInput {
             dataset_name: "ca13",
             class_name: "noclass",
@@ -396,8 +401,8 @@ fn main() -> Result<()> {
 
     eprintln!("Running experiments... Output is: experiment_name;mean;median;stddev with runtimes in seconds");
 
-    run_aabb_experiments(&in_path, 5)?;
-    //run_class_experiments(&in_path, 5)?;
+    //run_aabb_experiments(&in_path, 5)?;
+    run_class_experiments(&in_path, 5)?;
 
     Ok(())
 }

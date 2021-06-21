@@ -48,7 +48,7 @@ pub fn search_last_file_by_bounds_optimized<P: AsRef<Path>>(
     bounds: &AABB<f64>,
     result_collector: &mut dyn ResultCollector,
 ) -> Result<()> {
-    let mut reader = open_file_reader(path)?;
+    let mut reader = open_file_reader(path.as_ref())?;
 
     let raw_header = parse_las_header(&mut reader)?;
     let header = Header::from_raw(raw_header.clone())?;
@@ -64,6 +64,30 @@ pub fn search_last_file_by_bounds_optimized<P: AsRef<Path>>(
             header.bounds().max.z,
         ),
     );
+
+    let point_record_format = header.point_format().to_u8()?;
+    let offset_to_classification_in_las_point = match point_record_format {
+        0..=5 => 15,
+        6..=10 => 16,
+        _ => {
+            return Err(anyhow!(
+                "Invalid LAS format {} in file {}",
+                point_record_format,
+                path.as_ref().display()
+            ))
+        }
+    };
+    let offset_to_classification_block = raw_header.offset_to_point_data as u64
+        + (header.number_of_points() * offset_to_classification_in_las_point);
+
+    let offset_to_color_in_las_point = match point_record_format {
+        2 => Some(20),
+        3 => Some(28),
+        5 => Some(28),
+        _ => None,
+    };
+    let offset_to_color_block = offset_to_color_in_las_point
+        .map(|o| raw_header.offset_to_point_data as u64 + (header.number_of_points() * o));
 
     if !file_bounds.intersects(bounds) {
         return Ok(());
@@ -85,14 +109,15 @@ pub fn search_last_file_by_bounds_optimized<P: AsRef<Path>>(
     );
 
     let size_of_single_position = 12;
+    let size_of_single_color = 6;
 
     let offsets_to_positions_block: u64 = raw_header.offset_to_point_data as u64;
     reader.seek(SeekFrom::Start(offsets_to_positions_block))?;
 
     for idx in 0..header.number_of_points() {
-        let offset_of_current_point = idx * size_of_single_position;
+        let offset_of_current_position = idx * size_of_single_position;
         reader.seek(SeekFrom::Start(
-            offsets_to_positions_block + offset_of_current_point,
+            offsets_to_positions_block + offset_of_current_position,
         ))?;
         let point_x = reader.read_i32::<LittleEndian>()? as i64;
         if point_x < query_bounds_local.min().x || point_x > query_bounds_local.max().x {
@@ -109,13 +134,32 @@ pub fn search_last_file_by_bounds_optimized<P: AsRef<Path>>(
             continue;
         }
 
+        // Read classification
+        let offset_of_current_classification = idx;
+        reader.seek(SeekFrom::Start(
+            offset_to_classification_block + offset_of_current_classification,
+        ))?;
+        let class = reader.read_u8()?;
+
+        // Read color (if it exists)
+        let color = if let Some(color_offset) = offset_to_color_block {
+            reader.seek(SeekFrom::Start((idx * size_of_single_color) + color_offset))?;
+            let r = reader.read_u16::<LittleEndian>()?;
+            let g = reader.read_u16::<LittleEndian>()?;
+            let b = reader.read_u16::<LittleEndian>()?;
+            Vector3::new(r, g, b)
+        } else {
+            Vector3::new(0, 0, 0)
+        };
+
         result_collector.collect_one(Point {
             position: Vector3::new(
                 (point_x as f64 * raw_header.x_scale_factor) + raw_header.x_offset,
                 (point_y as f64 * raw_header.y_scale_factor) + raw_header.y_offset,
                 (point_z as f64 * raw_header.z_scale_factor) + raw_header.z_offset,
             ),
-            ..Default::default()
+            classification: class,
+            color,
         });
     }
     Ok(())
@@ -178,21 +222,33 @@ pub fn search_last_file_by_classification_optimized<P: AsRef<Path>>(
     raw_header.point_data_record_format &= 0b1111;
     let header = Header::from_raw(raw_header.clone())?;
 
-    let offset_to_classification_in_point = match raw_header.point_data_record_format {
+    let point_record_format = header.point_format().to_u8()?;
+    let offset_to_classification_in_point = match point_record_format {
         0..=5 => 15,
         6..=10 => 16,
         _ => {
             return Err(anyhow!(
                 "Invalid LAS format {} in file {}",
-                raw_header.point_data_record_format,
+                point_record_format,
                 path.as_ref().display()
             ))
         }
     };
 
+    let offset_to_color_in_las_point = match point_record_format {
+        2 => Some(20),
+        3 => Some(28),
+        5 => Some(28),
+        _ => None,
+    };
+
     let offset_to_classifications_block =
         offset_to_classification_in_point * header.number_of_points();
     let size_of_classification = 1;
+
+    let offset_to_color_block = offset_to_color_in_las_point
+        .map(|o| raw_header.offset_to_point_data as u64 + (header.number_of_points() * o));
+    let size_of_color = 6;
 
     for point_idx in 0..header.number_of_points() {
         let classification_offset: u64 = (point_idx as u64 * size_of_classification)
@@ -205,12 +261,23 @@ pub fn search_last_file_by_classification_optimized<P: AsRef<Path>>(
             continue;
         }
 
-        // Now we read XYZ
+        // Read XYZ
         let position_offset = (point_idx as u64 * 12) + raw_header.offset_to_point_data as u64;
         reader.seek(SeekFrom::Start(position_offset))?;
         let point_x = reader.read_i32::<LittleEndian>()?;
         let point_y = reader.read_i32::<LittleEndian>()?;
         let point_z = reader.read_i32::<LittleEndian>()?;
+
+        // Read color (if it exists)
+        let color = if let Some(color_offset) = offset_to_color_block {
+            reader.seek(SeekFrom::Start((point_idx * size_of_color) + color_offset))?;
+            let r = reader.read_u16::<LittleEndian>()?;
+            let g = reader.read_u16::<LittleEndian>()?;
+            let b = reader.read_u16::<LittleEndian>()?;
+            Vector3::new(r, g, b)
+        } else {
+            Vector3::new(0, 0, 0)
+        };
 
         result_collector.collect_one(Point {
             position: Vector3::new(
@@ -219,7 +286,7 @@ pub fn search_last_file_by_classification_optimized<P: AsRef<Path>>(
                 (point_z as f64 * raw_header.z_scale_factor) + raw_header.z_offset,
             ),
             classification: classification,
-            ..Default::default()
+            color,
         });
     }
     Ok(())

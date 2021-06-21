@@ -20,6 +20,7 @@ pasture-io = "0.1.0"
 pasture-derive = "0.1.0"
 readers = {path = "../readers"}
 statrs = "0.14.0"
+num_cpus = "1.13.0"
 
 [profile.release]
 debug = true

@@ -519,6 +519,7 @@ dependencies = [
  "clap",
  "lz4",
  "memmap",
+ "num_cpus",
  "pasture-core",
  "pasture-derive",
  "pasture-io",

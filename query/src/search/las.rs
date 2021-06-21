@@ -1,5 +1,5 @@
 use crate::collect_points::ResultCollector;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, Context, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 use memmap::MmapOptions;
 use pasture_core::{
@@ -35,6 +35,15 @@ fn parse_las_header<R: std::io::Read>(mut reader: R) -> Result<raw::Header> {
     Ok(raw_header)
 }
 
+fn las_offset_to_color(point_record_format: u8) -> Option<u64> {
+    match point_record_format {
+        2 => Some(20),
+        3 => Some(28),
+        5 => Some(28),
+        _ => None,
+    }
+}
+
 /**
  * Each type of search is implemented twice, once by using the pointstream crate (simulating a real-world use-case)
  * and once with a hand-rolled solution (simulating maximum efficiency)
@@ -45,7 +54,7 @@ pub fn search_las_file_by_bounds_optimized<P: AsRef<Path>>(
     bounds: &AABB<f64>,
     result_collector: &mut dyn ResultCollector,
 ) -> Result<()> {
-    let mut reader = open_file_reader(path)?;
+    let mut reader = open_file_reader(path.as_ref())?;
 
     let raw_header = parse_las_header(&mut reader)?;
     let header = Header::from_raw(raw_header.clone())?;
@@ -61,6 +70,14 @@ pub fn search_las_file_by_bounds_optimized<P: AsRef<Path>>(
             header.bounds().max.z,
         ),
     );
+    println!("Point record size: {}", raw_header.point_data_record_length);
+    let color_offset = las_offset_to_color(
+        header
+            .point_format()
+            .to_u8()
+            .context("Invalid point record format")?,
+    );
+    let color_offset_from_classification = color_offset.map(|o| o - 16); //Classification is always 16 bytes (in all non-extended LAS formats, which are the only ones supported in this experiment)
 
     if !file_bounds.intersects(bounds) {
         return Ok(());
@@ -101,13 +118,30 @@ pub fn search_las_file_by_bounds_optimized<P: AsRef<Path>>(
             continue;
         }
 
+        // Seek to classification
+        reader.seek(SeekFrom::Current(3))?;
+
+        let class = reader.read_u8()?;
+
+        // Seek to color (if it exists)
+        let color = if let Some(color_offset) = color_offset_from_classification {
+            reader.seek(SeekFrom::Current(color_offset as i64))?;
+            let r = reader.read_u16::<LittleEndian>()?;
+            let g = reader.read_u16::<LittleEndian>()?;
+            let b = reader.read_u16::<LittleEndian>()?;
+            Vector3::new(r, g, b)
+        } else {
+            Vector3::new(0, 0, 0)
+        };
+
         result_collector.collect_one(Point {
             position: Vector3::new(
                 (point_x as f64 * raw_header.x_scale_factor) + raw_header.x_offset,
                 (point_y as f64 * raw_header.y_scale_factor) + raw_header.y_offset,
                 (point_z as f64 * raw_header.z_scale_factor) + raw_header.z_offset,
             ),
-            ..Default::default()
+            classification: class,
+            color,
         });
     }
     Ok(())
@@ -177,6 +211,13 @@ pub fn search_las_file_by_classification_optimized<P: AsRef<Path>>(
         }
     };
 
+    let offset_to_color_in_point = match raw_header.point_data_record_format {
+        2 => Some(20),
+        3 => Some(28),
+        5 => Some(28),
+        _ => None,
+    };
+
     for point_idx in 0..header.number_of_points() {
         let point_offset: u64 = point_idx as u64 * raw_header.point_data_record_length as u64
             + raw_header.offset_to_point_data as u64;
@@ -189,11 +230,22 @@ pub fn search_las_file_by_classification_optimized<P: AsRef<Path>>(
             continue;
         }
 
-        // Now we read XYZ
+        // Read position
         reader.seek(SeekFrom::Start(point_offset))?;
         let point_x = reader.read_i32::<LittleEndian>()?;
         let point_y = reader.read_i32::<LittleEndian>()?;
         let point_z = reader.read_i32::<LittleEndian>()?;
+
+        // Try to read color (if supported)
+        let color = if let Some(color_offset) = offset_to_color_in_point {
+            reader.seek(SeekFrom::Start(point_offset + color_offset))?;
+            let r = reader.read_u16::<LittleEndian>()?;
+            let g = reader.read_u16::<LittleEndian>()?;
+            let b = reader.read_u16::<LittleEndian>()?;
+            Vector3::new(r, g, b)
+        } else {
+            Vector3::new(0, 0, 0)
+        };
 
         result_collector.collect_one(Point {
             position: Vector3::new(
@@ -202,7 +254,7 @@ pub fn search_las_file_by_classification_optimized<P: AsRef<Path>>(
                 (point_z as f64 * raw_header.z_scale_factor) + raw_header.z_offset,
             ),
             classification: classification,
-            ..Default::default()
+            color,
         });
     }
     Ok(())

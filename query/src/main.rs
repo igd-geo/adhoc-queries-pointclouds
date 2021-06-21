@@ -191,22 +191,6 @@ fn is_valid_file(file: &Path) -> bool {
 }
 
 fn main() -> Result<()> {
-    // {
-    //     let dirs = get_all_input_files(Path::new(
-    //         "/home/pbormann/data/geodata/pointclouds/datasets/district_of_columbia",
-    //     ))?;
-    //     let metas = dirs
-    //         .iter()
-    //         .map(|path| {
-    //             let mut src = pointstream::pointcloud::LasSource::new(path).unwrap();
-    //             src.metadata().clone()
-    //         })
-    //         .collect::<Vec<_>>();
-
-    //     let all_meta = pointstream::pointcloud::Metadata::combine_many(metas.iter()).unwrap();
-    //     println!("{:?}", all_meta.bounds());
-    // }
-
     let t_start = Instant::now();
 
     let matches = App::new("I/O experiments")
@@ -242,12 +226,13 @@ fn main() -> Result<()> {
 
     let maybe_output_dir = matches.value_of("OUTPUT").map(|p| Path::new(p));
 
-    let all_bounds = input_files.iter().map(|f| -> Result<AABB<f64>> {
+    let all_bounds = input_files.iter().map(|f| -> Result<usize> {
         let reader = LASTReader::from(BufReader::new(File::open(f)?))?;
-        Ok(reader.get_metadata().bounds().unwrap().clone())
+        Ok(reader.get_metadata().number_of_points().unwrap())
     }).collect::<Result<Vec<_>, _>>()?;
-    let combined_bounds = all_bounds.into_iter().reduce(|a,b| AABB::union(&a,&b)).unwrap();
-    println!("{:?}", combined_bounds);
+    // let all_points : usize = all_bounds.into_iter().sum();
+    // println!("points: {}", all_points);
+    // return Ok(());
 
 
     let total_file_size: u64 = input_files

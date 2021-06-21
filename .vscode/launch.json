@@ -58,7 +58,7 @@
             "args": [
                 "-i",
                 //"/Users/pbormann/data/geodata/pointclouds/datasets/navvis_m6_3rdFloor/navvis_m6_HQ3rdFloor.laz",
-                "/Users/pbormann/data/projects/progressive_indexing/experiment_data/ca13/last",
+                "/Users/pbormann/data/projects/progressive_indexing/experiment_data/navvis3/las",
                 "--bounds",
                 "665000.0;3910000.0;0.0;705000.0;3950000.0;480.0" ,
                 //"664085.14;3889087.89;5.7;736910.93;3946652.31;693.55",
