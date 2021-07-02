@@ -6,20 +6,18 @@ mod grid_sampling;
 mod las;
 mod search;
 
-use crate::collect_points::ResultCollector;
-use anyhow::{anyhow, Context, Result};
-use clap::{value_t, App, Arg};
-use memmap::MmapOptions;
+use crate::collect_points::{ResultCollector};
+use anyhow::{anyhow, Result};
+use clap::{App, Arg};
 use pasture_core::{math::AABB, nalgebra::Point3};
 use pasture_io::base::{IOFactory, PointReadAndSeek, PointReader};
 use readers::{LASTReader, LAZERSource};
 use rayon::prelude::*;
-use rayon::prelude::*;
-use std::{convert::TryInto, fs::File, io::BufReader};
+use std::{fs::File, io::BufReader};
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
-use std::time::{Duration, Instant};
+use std::time::{Instant};
 
 use crate::search::{SearchImplementation, Searcher};
 
@@ -225,15 +223,6 @@ fn main() -> Result<()> {
     let input_files = get_all_input_files(input_dir)?.into_iter().filter(|f| is_valid_file(&f)).collect::<Vec<_>>();
 
     let maybe_output_dir = matches.value_of("OUTPUT").map(|p| Path::new(p));
-
-    let all_bounds = input_files.iter().map(|f| -> Result<usize> {
-        let reader = LASTReader::from(BufReader::new(File::open(f)?))?;
-        Ok(reader.get_metadata().number_of_points().unwrap())
-    }).collect::<Result<Vec<_>, _>>()?;
-    // let all_points : usize = all_bounds.into_iter().sum();
-    // println!("points: {}", all_points);
-    // return Ok(());
-
 
     let total_file_size: u64 = input_files
         .iter()
