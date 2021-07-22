@@ -30,7 +30,7 @@ fn open_file_reader<P: AsRef<Path>>(path: P) -> Result<Cursor<memmap::Mmap>> {
     }
 }
 
-fn parse_las_header<R: std::io::Read>(mut reader: R) -> Result<raw::Header> {
+fn parse_las_header<R: std::io::Read>(reader: R) -> Result<raw::Header> {
     let raw_header = raw::Header::read_from(reader)?;
     Ok(raw_header)
 }
@@ -294,7 +294,7 @@ pub fn search_las_file_by_classification<P: AsRef<Path>>(
     Ok(())
 }
 
-pub fn search_las_file_by_time_range_optimized<P: AsRef<Path>>(
+pub fn _search_las_file_by_time_range_optimized<P: AsRef<Path>>(
     path: P,
     time_range: Range<f64>,
     result_collector: &mut dyn ResultCollector,
@@ -357,10 +357,10 @@ pub fn search_las_file_by_time_range_optimized<P: AsRef<Path>>(
     Ok(())
 }
 
-pub fn search_las_file_by_time_range<P: AsRef<Path>>(
-    path: P,
-    time_range: Range<f64>,
-    result_collector: &mut dyn ResultCollector,
+pub fn _search_las_file_by_time_range<P: AsRef<Path>>(
+    _path: P,
+    _time_range: Range<f64>,
+    _result_collector: &mut dyn ResultCollector,
 ) -> Result<()> {
     // PointStream does not yet support GPS time
     todo!("not implemented")

@@ -1,6 +1,6 @@
 use anyhow::{anyhow, Result};
 use bincode;
-use pasture_core::{math::AABB, nalgebra::{Point3, Vector3}};
+use pasture_core::{math::AABB, nalgebra::Point3};
 use serde::{Deserialize, Serialize};
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -40,7 +40,7 @@ pub struct LASHeader {
 }
 
 impl LASHeader {
-    pub fn bounds(&self) -> AABB<f64> {
+    pub fn _bounds(&self) -> AABB<f64> {
         AABB::from_min_max(
             Point3::new(self.min_x, self.min_y, self.min_z),
             Point3::new(self.max_x, self.max_y, self.max_z),
@@ -51,7 +51,7 @@ impl LASHeader {
 /**
  * Try parsing a LAS header from the given binary blob
  */
-pub fn try_parse_las_header(data: &[u8]) -> Result<LASHeader> {
+pub fn _try_parse_las_header(data: &[u8]) -> Result<LASHeader> {
     if data.len() < 227 {
         return Err(anyhow!(
             "Could not parse LAS header, buffer has to be at least 227 bytes large!"

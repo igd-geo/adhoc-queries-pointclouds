@@ -1,7 +1,6 @@
 use crate::collect_points::ResultCollector;
-use crate::search::{search_las_file_by_bounds, search_las_file_by_classification};
-use anyhow::{anyhow, Result};
-use byteorder::{LittleEndian, ReadBytesExt};
+use crate::search::search_las_file_by_classification;
+use anyhow::Result;
 use memmap::MmapOptions;
 use pasture_core::{
     containers::{InterleavedPointBufferExt, InterleavedVecPointStorage, PointBufferWriteable},
@@ -10,10 +9,8 @@ use pasture_core::{
 };
 use pasture_io::{base::PointReader, las::LASReader};
 use readers::Point;
-use std::convert::TryInto;
 use std::fs::File;
-use std::io::SeekFrom;
-use std::io::{Cursor, Seek};
+use std::io::Cursor;
 use std::ops::Range;
 use std::path::Path;
 
@@ -131,18 +128,18 @@ pub fn search_laz_file_by_classification<P: AsRef<Path>>(
     search_las_file_by_classification(path, class, result_collector)
 }
 
-pub fn search_laz_file_by_time_range_optimized<P: AsRef<Path>>(
-    path: P,
-    time_range: Range<f64>,
-    result_collector: &mut dyn ResultCollector,
+pub fn _search_laz_file_by_time_range_optimized<P: AsRef<Path>>(
+    _path: P,
+    _time_range: Range<f64>,
+    _result_collector: &mut dyn ResultCollector,
 ) -> Result<()> {
     todo!("Not implemented")
 }
 
-pub fn search_laz_file_by_time_range<P: AsRef<Path>>(
-    path: P,
-    time_range: Range<f64>,
-    result_collector: &mut dyn ResultCollector,
+pub fn _search_laz_file_by_time_range<P: AsRef<Path>>(
+    _path: P,
+    _time_range: Range<f64>,
+    _result_collector: &mut dyn ResultCollector,
 ) -> Result<()> {
     // PointStream does not yet support GPS time
     todo!("not implemented")

@@ -1,6 +1,6 @@
 use crate::collect_points::ResultCollector;
-use anyhow::{anyhow, Result};
-use byteorder::{LittleEndian, ReadBytesExt};
+use anyhow::Result;
+
 use memmap::MmapOptions;
 use pasture_core::{
     containers::{
@@ -12,14 +12,12 @@ use pasture_core::{
         PointType,
     },
     math::AABB,
-    nalgebra::{Point3, Vector3},
+    nalgebra::Vector3,
 };
-use pasture_io::{base::PointReader, las_rs::raw};
+use pasture_io::base::PointReader;
 use readers::{LAZERSource, Point};
-use std::convert::TryInto;
 use std::fs::File;
-use std::io::SeekFrom;
-use std::io::{BufReader, Cursor, Read, Seek};
+use std::io::Cursor;
 use std::ops::Range;
 use std::path::Path;
 
@@ -31,11 +29,6 @@ fn open_file_reader<P: AsRef<Path>>(path: P) -> Result<Cursor<memmap::Mmap>> {
         let cursor = Cursor::new(mmapped_file);
         Ok(cursor)
     }
-}
-
-fn parse_las_header<R: std::io::Read>(mut reader: R) -> Result<raw::Header> {
-    let raw_header = raw::Header::read_from(reader)?;
-    Ok(raw_header)
 }
 
 pub fn search_lazer_file_by_bounds<P: AsRef<Path>>(
@@ -119,10 +112,10 @@ pub fn search_lazer_file_by_classification<P: AsRef<Path>>(
     Ok(())
 }
 
-pub fn search_lazer_file_by_time_range<P: AsRef<Path>>(
-    path: P,
-    time_range: Range<f64>,
-    result_collector: &mut dyn ResultCollector,
+pub fn _search_lazer_file_by_time_range<P: AsRef<Path>>(
+    _path: P,
+    _time_range: Range<f64>,
+    _result_collector: &mut dyn ResultCollector,
 ) -> Result<()> {
     // PointStream does not yet support GPS time
     todo!("not implemented")

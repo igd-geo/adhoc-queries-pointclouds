@@ -3,8 +3,8 @@ use byteorder::{LittleEndian, ReadBytesExt};
 use lz4::Decoder;
 use pasture_core::{
     containers::{
-        InterleavedPointBufferMut, InterleavedPointView, PerAttributePointView,
-        PerAttributeVecPointStorage, PointBufferWriteable,
+        InterleavedPointBufferMut, PerAttributePointView, PerAttributeVecPointStorage,
+        PointBufferWriteable,
     },
     layout::{
         attributes::{CLASSIFICATION, COLOR_RGB, INTENSITY, POSITION_3D},
@@ -18,16 +18,16 @@ use pasture_io::{
     base::{PointReader, SeekToPoint},
     las::LASMetadata,
     las_rs::{
-        raw::{self, point},
+        raw::{self},
         Header,
     },
 };
-use std::cmp;
+
 use std::collections::HashMap;
 use std::convert::TryInto;
-use std::fmt::Debug;
+
 use std::fs::File;
-use std::io::{BufRead, BufReader, Cursor, Read, Seek, SeekFrom};
+use std::io::{BufReader, Cursor, Read, Seek, SeekFrom};
 use std::path::Path;
 
 trait SeekRead: Seek + Read {}
@@ -268,10 +268,10 @@ impl LAZERSource {
         (block_index as usize) == (self.block_offsets.len() - 1)
     }
 
-    fn read_into_interleaved(
+    fn _read_into_interleaved(
         &mut self,
-        point_buffer: &dyn InterleavedPointBufferMut,
-        count: usize,
+        _point_buffer: &dyn InterleavedPointBufferMut,
+        _count: usize,
     ) -> Result<usize> {
         todo!()
         // let num_points_to_read = usize::min(
@@ -519,7 +519,7 @@ impl PointReader for LAZERSource {
         // Since moving around in the compressed file is slow (Decoder has no random access), we move only in the seek
         // function. read_into assumes that we are at the correct position!
         // TODO read_into for now only works on per-attribute buffers
-        let per_attribute_buffer = point_buffer
+        point_buffer
             .as_per_attribute()
             .expect("LAZERSource currently only supports reading into PerAttribute buffers");
 
@@ -613,7 +613,7 @@ impl PointReader for LAZERSource {
                     );
 
                     let pos_start_idx = (idx * pos_size_in_target) as usize;
-                    let pos_end_idx = (pos_start_idx + pos_size_in_target as usize);
+                    let pos_end_idx = pos_start_idx + pos_size_in_target as usize;
                     let target_slice = &mut pos_buffer[pos_start_idx..pos_end_idx];
                     if let Some(ref converter) = positions_converter {
                         unsafe {
@@ -643,8 +643,7 @@ impl PointReader for LAZERSource {
                     let intensity = intensity_decoder.read_i16::<LittleEndian>()?;
 
                     let intensity_start_idx = (idx * intensity_size_in_target) as usize;
-                    let intensity_end_idx =
-                        (intensity_start_idx + intensity_size_in_target as usize);
+                    let intensity_end_idx = intensity_start_idx + intensity_size_in_target as usize;
                     let target_slice =
                         &mut intensity_buffer[intensity_start_idx..intensity_end_idx];
                     if let Some(ref converter) = intensity_converter {
@@ -675,7 +674,7 @@ impl PointReader for LAZERSource {
                     let class = class_decoder.read_u8()?;
 
                     let class_start_idx = (idx * class_size_in_target) as usize;
-                    let class_end_idx = (class_start_idx + class_size_in_target as usize);
+                    let class_end_idx = class_start_idx + class_size_in_target as usize;
                     let target_slice = &mut class_buffer[class_start_idx..class_end_idx];
                     if let Some(ref converter) = class_converter {
                         unsafe {
@@ -706,7 +705,7 @@ impl PointReader for LAZERSource {
                         let color = Vector3::new(r, g, b);
 
                         let color_start_idx = (idx * color_size_in_target) as usize;
-                        let color_end_idx = (color_start_idx + color_size_in_target as usize);
+                        let color_end_idx = color_start_idx + color_size_in_target as usize;
                         let target_slice = &mut color_buffer[color_start_idx..color_end_idx];
                         if let Some(ref converter) = color_converter {
                             unsafe {
@@ -782,7 +781,7 @@ impl PointReader for LAZERSource {
 }
 
 impl SeekToPoint for LAZERSource {
-    fn seek_point(&mut self, position: SeekFrom) -> Result<usize> {
+    fn seek_point(&mut self, _position: SeekFrom) -> Result<usize> {
         todo!()
         // if index == self.current_point_index {
         //     return;

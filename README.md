@@ -100,3 +100,7 @@ cargo run --release --bin run_postgis_queries -- dbname NAME_OF_DB --host HOST_I
 ```
 
 Provide the appropriate credentials for your database and this should execute all queries as stated in the paper. 
+
+## License
+
+This project is licensed under the MIT license. 

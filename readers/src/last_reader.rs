@@ -1,4 +1,3 @@
-use core::num;
 use std::{
     collections::HashMap,
     convert::TryInto,
@@ -16,7 +15,7 @@ use pasture_core::{
     layout::{
         attributes::{CLASSIFICATION, COLOR_RGB, INTENSITY, POSITION_3D},
         conversion::{get_converter_for_attributes, AttributeConversionFn},
-        FieldAlignment, PointAttributeDefinition, PointAttributeMember, PointLayout, PrimitiveType,
+        FieldAlignment, PointAttributeMember, PointLayout, PrimitiveType,
     },
     nalgebra::Vector3,
     util::view_raw_bytes,
@@ -25,7 +24,7 @@ use pasture_io::{
     base::{PointReader, SeekToPoint},
     las::LASMetadata,
     las_rs::{
-        raw::{self, point},
+        raw::{self},
         Header,
     },
 };
@@ -322,7 +321,7 @@ impl PointReader for LASTReader {
         let chunk_size = usize::min(num_points_to_read, 50_000 as usize);
         let mut temporary_buffers_per_attribute = target_layout
             .attributes()
-            .map(|a| vec![0; (a.size() as usize * chunk_size)])
+            .map(|a| vec![0; a.size() as usize * chunk_size])
             .collect::<Vec<Vec<u8>>>();
 
         let first_chunk_idx = first_point_index / chunk_size;
@@ -390,7 +389,7 @@ impl PointReader for LASTReader {
 }
 
 impl SeekToPoint for LASTReader {
-    fn seek_point(&mut self, position: SeekFrom) -> Result<usize> {
+    fn seek_point(&mut self, _position: SeekFrom) -> Result<usize> {
         todo!()
     }
 }

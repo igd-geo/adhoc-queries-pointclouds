@@ -46,7 +46,7 @@ impl ResultCollector for BufferCollector {
 pub struct StdOutCollector {}
 
 impl StdOutCollector {
-    pub fn new() -> Self {
+    pub fn _new() -> Self {
         Self {}
     }
 }

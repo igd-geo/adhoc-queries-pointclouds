@@ -16,10 +16,10 @@ use pasture_io::{
     las_rs::{raw, Header},
 };
 use readers::{LASTReader, Point};
-use std::convert::TryInto;
+
 use std::fs::File;
 use std::io::SeekFrom;
-use std::io::{BufReader, Cursor, Read, Seek};
+use std::io::{Cursor, Seek};
 use std::ops::Range;
 use std::path::Path;
 
@@ -33,7 +33,7 @@ fn open_file_reader<P: AsRef<Path>>(path: P) -> Result<Cursor<memmap::Mmap>> {
     }
 }
 
-fn parse_las_header<R: std::io::Read>(mut reader: R) -> Result<raw::Header> {
+fn parse_las_header<R: std::io::Read>(reader: R) -> Result<raw::Header> {
     let raw_header = raw::Header::read_from(reader)?;
     Ok(raw_header)
 }
@@ -293,9 +293,9 @@ pub fn search_last_file_by_classification_optimized<P: AsRef<Path>>(
 }
 
 pub fn search_last_file_by_classification<P: AsRef<Path>>(
-    path: P,
-    class: u8,
-    result_collector: &mut dyn ResultCollector,
+    _path: P,
+    _class: u8,
+    _result_collector: &mut dyn ResultCollector,
 ) -> Result<()> {
     todo!()
     // let reader = open_file_reader(path)?;
@@ -336,10 +336,10 @@ pub fn search_last_file_by_classification<P: AsRef<Path>>(
     // Ok(())
 }
 
-pub fn search_last_file_by_time_range_optimized<P: AsRef<Path>>(
-    path: P,
-    time_range: Range<f64>,
-    result_collector: &mut dyn ResultCollector,
+pub fn _search_last_file_by_time_range_optimized<P: AsRef<Path>>(
+    _path: P,
+    _time_range: Range<f64>,
+    _result_collector: &mut dyn ResultCollector,
 ) -> Result<()> {
     // let mut reader = open_file_reader(&path)?;
 
@@ -399,10 +399,10 @@ pub fn search_last_file_by_time_range_optimized<P: AsRef<Path>>(
     todo!("not implementeds")
 }
 
-pub fn search_last_file_by_time_range<P: AsRef<Path>>(
-    path: P,
-    time_range: Range<f64>,
-    result_collector: &mut dyn ResultCollector,
+pub fn _search_last_file_by_time_range<P: AsRef<Path>>(
+    _path: P,
+    _time_range: Range<f64>,
+    _result_collector: &mut dyn ResultCollector,
 ) -> Result<()> {
     // PointStream does not yet support GPS time
     todo!("not implemented")
