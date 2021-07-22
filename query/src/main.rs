@@ -10,10 +10,10 @@ use crate::collect_points::{ResultCollector};
 use anyhow::{anyhow, Result};
 use clap::{App, Arg};
 use pasture_core::{math::AABB, nalgebra::Point3};
-use pasture_io::base::{IOFactory, PointReadAndSeek, PointReader};
+use pasture_io::base::{IOFactory, PointReadAndSeek};
 use readers::{LASTReader, LAZERSource};
 use rayon::prelude::*;
-use std::{fs::File, io::BufReader};
+use std::{fs::File};
 use std::fs;
 use std::path::Path;
 use std::path::PathBuf;
@@ -107,7 +107,7 @@ fn get_total_bounds(files : &[PathBuf]) -> Result<AABB<f64>> {
     });
 
     let file_bounds = files.iter().map(|f| -> Result<AABB<f64>> {
-        let mut source = factory.make_reader(f)?;
+        let source = factory.make_reader(f)?;
         Ok(source.get_metadata().bounds().unwrap().into())
     }).collect::<Result<Vec<_>, _>>()?;
 

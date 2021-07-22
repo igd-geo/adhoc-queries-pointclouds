@@ -6,7 +6,6 @@ use std::{
 
 use anyhow::{anyhow, Context, Result};
 use clap::{value_t, App, Arg};
-use pasture_core::math::AABB;
 use pasture_io::base::IOFactory;
 use readers::{LASTReader, LAZERSource};
 
@@ -77,14 +76,6 @@ fn count_points_in_dataset<P: AsRef<Path>>(path_to_dataset: P) -> Result<usize> 
         .collect::<Result<Vec<_>, _>>()?;
 
     Ok(points_per_file.into_iter().sum())
-}
-
-fn execute_aabb_query(
-    path_to_dataset: &Path,
-    bounds: &AABB<f64>,
-    density: Option<f64>,
-) -> Result<()> {
-    todo!()
 }
 
 fn main() -> Result<()> {

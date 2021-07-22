@@ -1,19 +1,8 @@
-use std::{
-    fs::{read_dir, File},
-    io::BufReader,
-    path::{Path, PathBuf},
-    process::{Command, ExitStatus},
-    time::Instant,
-};
+use std::{path::Path, process::Command, time::Instant};
 
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use clap::{value_t, App, Arg};
-use pasture_core::{
-    math::AABB,
-    nalgebra::{Point3, Vector3},
-};
-use pasture_io::base::IOFactory;
-use readers::{LASTReader, LAZERSource};
+use pasture_core::{math::AABB, nalgebra::Point3};
 use statrs::statistics::{Data, Median, Statistics};
 
 fn reset_page_cache() -> Result<()> {
@@ -88,7 +77,7 @@ fn execute_aabb_query<P: AsRef<Path>>(
 fn execute_class_query<P: AsRef<Path>>(path_to_dataset: P, class: u8) -> Result<f64> {
     reset_page_cache()?;
 
-    let mut args = vec![
+    let args = vec![
         "-i".to_owned(),
         path_to_dataset.as_ref().display().to_string(),
         "--class".to_owned(),
@@ -114,12 +103,8 @@ fn execute_class_query<P: AsRef<Path>>(path_to_dataset: P, class: u8) -> Result<
     }
 }
 
-fn run_aabb_experiments<P: AsRef<Path>>(in_path: P, num_runs: usize) -> Result<()> {
-    let file_extensions = vec![
-        "las", //"laz",
-        "last",
-        //"lazer"
-    ];
+fn run_aabb_experiments<P: AsRef<Path>>(in_path: P, num_runs: usize, which: usize) -> Result<()> {
+    let file_extensions = vec!["las", "laz", "last", "lazer"];
 
     let aabb_navvis_s = AABB::from_min_max(Point3::new(0.0, 0.0, 0.0), Point3::new(2.0, 2.0, 2.0));
     let aabb_navvis_l =
@@ -165,7 +150,7 @@ fn run_aabb_experiments<P: AsRef<Path>>(in_path: P, num_runs: usize) -> Result<(
         pub density: Option<f64>,
     }
 
-    let aabb_experiment_inputs = vec![
+    let navvis_inputs = vec![
         AABBExperimentInput {
             dataset_name: "navvis3",
             bounds_name: "s",
@@ -202,7 +187,8 @@ fn run_aabb_experiments<P: AsRef<Path>>(in_path: P, num_runs: usize) -> Result<(
             bounds: aabb_navvis_xl.clone(),
             density: Some(0.1),
         },
-        //doc
+    ];
+    let doc_inputs = vec![
         AABBExperimentInput {
             dataset_name: "doc",
             bounds_name: "s",
@@ -239,7 +225,8 @@ fn run_aabb_experiments<P: AsRef<Path>>(in_path: P, num_runs: usize) -> Result<(
             bounds: aabb_doc_xl.clone(),
             density: Some(25.0),
         },
-        //ca13
+    ];
+    let ca13_inputs = vec![
         AABBExperimentInput {
             dataset_name: "ca13",
             bounds_name: "s",
@@ -278,7 +265,14 @@ fn run_aabb_experiments<P: AsRef<Path>>(in_path: P, num_runs: usize) -> Result<(
         },
     ];
 
-    for data in aabb_experiment_inputs.iter() {
+    let experiment_inputs = match which {
+        1 => navvis_inputs.as_slice(),
+        2 => doc_inputs.as_slice(),
+        3 => ca13_inputs.as_slice(),
+        _ => panic!("Invalid experiment number!"),
+    };
+
+    for data in experiment_inputs.iter() {
         for extension in file_extensions.iter() {
             eprintln!(
                 "Experiment {}_{}_{}...",
@@ -314,12 +308,8 @@ fn run_aabb_experiments<P: AsRef<Path>>(in_path: P, num_runs: usize) -> Result<(
     Ok(())
 }
 
-fn run_class_experiments<P: AsRef<Path>>(in_path: P, num_runs: usize) -> Result<()> {
-    let file_extensions = vec![
-        "las", //"laz",
-        "last",
-        //"lazer",
-    ];
+fn run_class_experiments<P: AsRef<Path>>(in_path: P, num_runs: usize, which: usize) -> Result<()> {
+    let file_extensions = vec!["las", "laz", "last", "lazer"];
 
     struct ClassExperimentInput {
         pub dataset_name: &'static str,
@@ -327,7 +317,7 @@ fn run_class_experiments<P: AsRef<Path>>(in_path: P, num_runs: usize) -> Result<
         pub class: u8,
     }
 
-    let experiment_data = vec![
+    let doc_data = vec![
         ClassExperimentInput {
             dataset_name: "doc",
             class_name: "building",
@@ -338,6 +328,8 @@ fn run_class_experiments<P: AsRef<Path>>(in_path: P, num_runs: usize) -> Result<
             class_name: "noclass",
             class: 19,
         },
+    ];
+    let ca13_data = vec![
         ClassExperimentInput {
             dataset_name: "ca13",
             class_name: "building",
@@ -349,6 +341,12 @@ fn run_class_experiments<P: AsRef<Path>>(in_path: P, num_runs: usize) -> Result<
             class: 19,
         },
     ];
+
+    let experiment_data = match which {
+        4 => doc_data.as_slice(),
+        5 => ca13_data.as_slice(),
+        _ => panic!("Invalid experiment number!"),
+    };
 
     for data in experiment_data.iter() {
         for extension in file_extensions.iter() {
@@ -395,14 +393,29 @@ fn main() -> Result<()> {
                 .takes_value(true)
                 .required(true),
         )
+        .arg(
+            Arg::with_name("EXPERIMENT")
+            .short("e")
+            .long("experiment")
+            .value_name("EXPERIMENT_ID")
+            .help("Which experiment to run? Valid numbers are: 1 (navvis AABB queries), 2 (doc AABB queries), 3 (ca13 AABB queries), 4 (doc class queries), 5 (ca13 class queries). Make sure that the INPUT argument points to the right dataset!").takes_value(true).required(true)
+        )
         .get_matches();
 
     let in_path = value_t!(matches, "INPUT", String).context("Argument 'INPUT' not found")?;
+    let experiment_id =
+        value_t!(matches, "EXPERIMENT", usize).context("Argument 'EXPERIMENT' not found")?;
 
     eprintln!("Running experiments... Output is: experiment_name;mean;median;stddev with runtimes in seconds");
 
-    //run_aabb_experiments(&in_path, 5)?;
-    run_class_experiments(&in_path, 5)?;
+    match experiment_id {
+        1..=3 => run_aabb_experiments(in_path, 5, experiment_id),
+        4..=5 => run_class_experiments(&in_path, 5, experiment_id),
+        _ => bail!(
+            "Invalid experiment ID {}. Experiment ID must be between 1 and 5 (inclusive)!",
+            experiment_id
+        ),
+    }?;
 
     Ok(())
 }

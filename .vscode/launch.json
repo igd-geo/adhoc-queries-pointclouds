@@ -24,15 +24,15 @@
                 //"/Users/pbormann/data/geodata/pointclouds/datasets/navvis_m6_3rdFloor/navvis_m6_HQ3rdFloor.laz",
                 "/Users/pbormann/data/projects/progressive_indexing/experiment_data/ca13/last",
                 "--bounds",
-                "695000.0;3917500.0;43.0;696500.0;3920000.0;280.0" ,
+                "665000;3910000;0;705000;3950000;480" ,
                 "--optimized",
                 "--parallel",
                 // "--class",
                 // "6"
                 //"--density",
                 //"0.1",
-                //"-o",
-                //"/Users/pbormann/tmp"
+                "-o",
+                "/Users/pbormann/tmp"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
@@ -58,18 +58,17 @@
             "args": [
                 "-i",
                 //"/Users/pbormann/data/geodata/pointclouds/datasets/navvis_m6_3rdFloor/navvis_m6_HQ3rdFloor.laz",
-                "/Users/pbormann/data/projects/progressive_indexing/experiment_data/navvis3/las",
+                "/Users/pbormann/data/projects/progressive_indexing/experiment_data/ca13/last",
                 "--bounds",
-                "665000.0;3910000.0;0.0;705000.0;3950000.0;480.0" ,
-                //"664085.14;3889087.89;5.7;736910.93;3946652.31;693.55",
+                "665000;3910000;0;705000;3950000;480" ,
                 "--optimized",
                 "--parallel",
                 // "--class",
                 // "6"
                 //"--density",
                 //"0.1",
-                //"-o",
-                //"/Users/pbormann/tmp"
+                "-o",
+                "/Users/pbormann/tmp"
             ],
             "stopAtEntry": false,
             "cwd": "${workspaceFolder}",

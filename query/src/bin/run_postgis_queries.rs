@@ -277,18 +277,17 @@ async fn main() -> Result<()> {
         xl: "'SRID=4329;POLYGON((389400 124200, 389400 148200, 406200 148200, 406200 124200, 389400 124200))'::geometry".into(),
     };
     let ca13_bounds = Bounds {
-        s: "'SRID=4329;POLYGON((695000 3917500, 695000 3920000, 696500 3920000, 696500 3917500, 695000 3917500))'::geometry".into(),
-        l: "'SRID=4329;POLYGON((679000 3925000, 679000 3935000, 691000 3935000, 691000 3925000, 679000 3925000))'::geometry".into(),
+        s: "'SRID=4329;POLYGON((665000 3910000, 665000 3950000, 705000 3950000, 705000 3910000, 665000 3910000))'::geometry".into(),
+        l: "'SRID=4329;POLYGON((665000 3910000, 665000 3950000, 710000 3950000, 710000 3910000, 665000 3910000))'::geometry".into(),
         xl: "'SRID=4329;POLYGON((643431.76 3883547.565, 643431.76 3977026.735, 736910.93 3977026.735, 736910.93 3883547.565, 643431.76 3883547.565))'::geometry".into(),
     };
 
-    //run_queries(&navvis_bounds, "navvis", 56.2, &client).await?;
+    run_spatial_queries(&navvis_bounds, "navvis", NAVVIS_NUM_MPOINTS, &client).await?;
     run_spatial_queries(&doc_bounds, "doc", DOC_NUM_MPOINTS, &client).await?;
+    run_spatial_queries(&ca13_bounds, "ca13", CA13_NUM_MPOINTS, &client).await?;
 
-    //run_spatial_queries(&ca13_bounds, "ca13", CA13_NUM_MPOINTS, &client).await?;
-
-    //run_class_queries("doc", DOC_NUM_MPOINTS, &client).await?;
-    //run_class_queries("ca13", CA13_NUM_MPOINTS, &client).await?;
+    run_class_queries("doc", DOC_NUM_MPOINTS, &client).await?;
+    run_class_queries("ca13", CA13_NUM_MPOINTS, &client).await?;
 
     Ok(())
 }
