@@ -47,11 +47,12 @@ impl SparseGrid {
     }
 
     pub fn insert_point(&mut self, point: Point) -> bool {
-        let rx = (point.position.x - self.bounds.min().x) * self.dimensions.x as f64
+        let point_position = point.position;
+        let rx = (point_position.x - self.bounds.min().x) * self.dimensions.x as f64
             / (self.bounds.max().x - self.bounds.min().x);
-        let ry = (point.position.y - self.bounds.min().y) * self.dimensions.y as f64
+        let ry = (point_position.y - self.bounds.min().y) * self.dimensions.y as f64
             / (self.bounds.max().y - self.bounds.min().y);
-        let rz = (point.position.z - self.bounds.min().z) * self.dimensions.z as f64
+        let rz = (point_position.z - self.bounds.min().z) * self.dimensions.z as f64
             / (self.bounds.max().z - self.bounds.min().z);
 
         let cell_x = rx as u64;
@@ -79,17 +80,18 @@ impl SparseGrid {
                     (cell_y as f64 + 0.5) * self.cell_size + self.bounds.min().y,
                     (cell_z as f64 + 0.5) * self.cell_size + self.bounds.min().z,
                 );
+                let current_point_position = current_point.position;
                 let cur_dist_sqr = distance_squared(
                     &cell_center,
                     &Point3::new(
-                        current_point.position.x,
-                        current_point.position.y,
-                        current_point.position.z,
+                        current_point_position.x,
+                        current_point_position.y,
+                        current_point_position.z,
                     ),
                 );
                 let new_dist_sqr = distance_squared(
                     &cell_center,
-                    &Point3::new(point.position.x, point.position.y, point.position.z),
+                    &Point3::new(point_position.x, point_position.y, point_position.z),
                 );
 
                 if new_dist_sqr < cur_dist_sqr {
@@ -131,9 +133,11 @@ mod tests {
 
         let points = grid.points().collect::<Vec<_>>();
         assert_eq!(points.len(), 1);
-        assert_eq!(points[0].position.x, -4.5);
-        assert_eq!(points[0].position.y, -4.6);
-        assert_eq!(points[0].position.z, -4.7);
+
+        let first_point_position = points[0].position;
+        assert_eq!(first_point_position.x, -4.5);
+        assert_eq!(first_point_position.y, -4.6);
+        assert_eq!(first_point_position.z, -4.7);
 
         Ok(())
     }
@@ -161,13 +165,15 @@ mod tests {
         let points = grid.points().collect::<Vec<_>>();
         assert_eq!(points.len(), 2);
 
-        assert_eq!(points[0].position.x, -4.5);
-        assert_eq!(points[0].position.y, -4.6);
-        assert_eq!(points[0].position.z, -4.7);
+        let first_point_position = points[0].position;
+        assert_eq!(first_point_position.x, -4.5);
+        assert_eq!(first_point_position.y, -4.6);
+        assert_eq!(first_point_position.z, -4.7);
 
-        assert_eq!(points[1].position.x, -3.5);
-        assert_eq!(points[1].position.y, -4.5);
-        assert_eq!(points[1].position.z, -4.4);
+        let second_point_position = points[1].position;
+        assert_eq!(second_point_position.x, -3.5);
+        assert_eq!(second_point_position.y, -4.5);
+        assert_eq!(second_point_position.z, -4.4);
 
         Ok(())
     }
@@ -193,9 +199,10 @@ mod tests {
         let points = grid.points().collect::<Vec<_>>();
         assert_eq!(points.len(), 1);
 
-        assert_eq!(points[0].position.x, -4.5);
-        assert_eq!(points[0].position.y, -4.4);
-        assert_eq!(points[0].position.z, -4.6);
+        let first_point_position = points[0].position;
+        assert_eq!(first_point_position.x, -4.5);
+        assert_eq!(first_point_position.y, -4.4);
+        assert_eq!(first_point_position.z, -4.6);
 
         Ok(())
     }
