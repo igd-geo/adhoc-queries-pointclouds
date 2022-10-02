@@ -1,367 +1,400 @@
-use crate::collect_points::ResultCollector;
-use anyhow::{anyhow, Context, Result};
-use byteorder::{LittleEndian, ReadBytesExt};
-use memmap::MmapOptions;
+use crate::{
+    collect_points::ResultCollector,
+    index::{Classification, Position},
+};
+use anyhow::Result;
+use byteorder::{LittleEndian, NativeEndian, ReadBytesExt, WriteBytesExt};
+use memmap::Mmap;
 use pasture_core::{
-    containers::{InterleavedPointBufferExt, InterleavedVecPointStorage},
-    layout::PointType,
-    math::AABB,
-    nalgebra::{Point3, Vector3},
+    containers::{InterleavedPointBufferMut, InterleavedVecPointStorage, PointBufferWriteable},
+    nalgebra::{clamp, Vector3},
 };
 use pasture_io::{
-    base::PointReader,
-    las::LASReader,
-    las_rs::{raw, Header},
+    las::point_layout_from_las_point_format,
+    las_rs::{point::Format, raw},
 };
-use readers::Point;
-use std::fs::File;
 use std::io::SeekFrom;
 use std::io::{Cursor, Seek};
 use std::ops::Range;
-use std::path::Path;
 
-/// Open a file reader to the given file
-fn open_file_reader<P: AsRef<Path>>(path: P) -> Result<Cursor<memmap::Mmap>> {
-    let file = File::open(path)?;
-    unsafe {
-        let mmapped_file = MmapOptions::new().map(&file)?;
-        let cursor = Cursor::new(mmapped_file);
-        Ok(cursor)
+use super::{CompiledQueryAtom, Extractor};
+
+/// Convert a world-space position into the local integer-value space of the given LAS file using the offset and scale parameters in the header.
+/// If the position is outside the representable range, i32::MIN/i32::MAX values are returned instead
+pub(crate) fn to_local_integer_position(
+    position_world: &Vector3<f64>,
+    las_header: &raw::Header,
+) -> Vector3<i32> {
+    let local_x = (position_world.x / las_header.x_scale_factor) - las_header.x_offset;
+    let local_y = (position_world.y / las_header.y_scale_factor) - las_header.y_offset;
+    let local_z = (position_world.z / las_header.z_scale_factor) - las_header.z_offset;
+    Vector3::new(
+        clamp(local_x, i32::MIN as f64, i32::MAX as f64) as i32,
+        clamp(local_y, i32::MIN as f64, i32::MAX as f64) as i32,
+        clamp(local_z, i32::MIN as f64, i32::MAX as f64) as i32,
+    )
+}
+
+pub struct LASExtractor;
+
+impl Extractor for LASExtractor {
+    fn extract_data(
+        &self,
+        file: &mut Cursor<Mmap>,
+        file_header: &raw::Header,
+        block: Range<usize>,
+        matching_indices: &mut [bool],
+        num_matches: usize,
+        result_collector: &mut dyn ResultCollector,
+    ) -> Result<()> {
+        let point_format =
+            Format::new(file_header.point_data_record_format).expect("Invalid point format");
+        let mut buffer = InterleavedVecPointStorage::with_capacity(
+            num_matches,
+            point_layout_from_las_point_format(&point_format)?,
+        );
+        buffer.resize(num_matches);
+
+        let mut current_point = 0;
+        for (relative_index, _) in matching_indices
+            .iter()
+            .enumerate()
+            .filter(|(_, is_match)| **is_match)
+        {
+            let point_index = relative_index + block.start;
+            let point_offset: u64 = point_index as u64
+                * file_header.point_data_record_length as u64
+                + file_header.offset_to_point_data as u64;
+            file.seek(SeekFrom::Start(point_offset))?;
+
+            let point_raw_data = buffer.get_raw_point_mut(current_point);
+            current_point += 1;
+
+            let mut point_data_writer = Cursor::new(point_raw_data);
+
+            // XYZ
+            let local_x = file.read_i32::<LittleEndian>()?;
+            let local_y = file.read_i32::<LittleEndian>()?;
+            let local_z = file.read_i32::<LittleEndian>()?;
+            let global_x = (local_x as f64 * file_header.x_scale_factor) + file_header.x_offset;
+            let global_y = (local_y as f64 * file_header.y_scale_factor) + file_header.y_offset;
+            let global_z = (local_z as f64 * file_header.z_scale_factor) + file_header.z_offset;
+            point_data_writer.write_f64::<NativeEndian>(global_x)?;
+            point_data_writer.write_f64::<NativeEndian>(global_y)?;
+            point_data_writer.write_f64::<NativeEndian>(global_z)?;
+
+            // Intensity
+            point_data_writer.write_i16::<NativeEndian>(file.read_i16::<LittleEndian>()?)?;
+
+            // Bit attributes
+            if point_format.is_extended {
+                let bit_attributes_first_byte = file.read_u8()?;
+                let bit_attributes_second_byte = file.read_u8()?;
+
+                let return_number = bit_attributes_first_byte & 0b1111;
+                let number_of_returns = (bit_attributes_first_byte >> 4) & 0b1111;
+                let classification_flags = bit_attributes_second_byte & 0b1111;
+                let scanner_channel = (bit_attributes_second_byte >> 4) & 0b11;
+                let scan_direction_flag = (bit_attributes_second_byte >> 6) & 0b1;
+                let edge_of_flight_line = (bit_attributes_second_byte >> 7) & 0b1;
+
+                point_data_writer.write_u8(return_number)?;
+                point_data_writer.write_u8(number_of_returns)?;
+                point_data_writer.write_u8(classification_flags)?;
+                point_data_writer.write_u8(scanner_channel)?;
+                point_data_writer.write_u8(scan_direction_flag)?;
+                point_data_writer.write_u8(edge_of_flight_line)?;
+            } else {
+                let bit_attributes = file.read_u8()?;
+                let return_number = bit_attributes & 0b111;
+                let number_of_returns = (bit_attributes >> 3) & 0b111;
+                let scan_direction_flag = (bit_attributes >> 6) & 0b1;
+                let edge_of_flight_line = (bit_attributes >> 7) & 0b1;
+
+                point_data_writer.write_u8(return_number)?;
+                point_data_writer.write_u8(number_of_returns)?;
+                point_data_writer.write_u8(scan_direction_flag)?;
+                point_data_writer.write_u8(edge_of_flight_line)?;
+            }
+
+            // Classification
+            point_data_writer.write_u8(file.read_u8()?)?;
+
+            // User data in format > 5, scan angle rank in format <= 5
+            point_data_writer.write_u8(file.read_u8()?)?;
+
+            if !point_format.is_extended {
+                // User data
+                point_data_writer.write_u8(file.read_u8()?)?;
+            } else {
+                // Scan angle
+                point_data_writer.write_i16::<NativeEndian>(file.read_i16::<LittleEndian>()?)?;
+            }
+
+            // Point source ID
+            point_data_writer.write_u16::<NativeEndian>(file.read_u16::<LittleEndian>()?)?;
+
+            // Format 0 is done here, the other formats are handled now
+
+            if point_format.has_gps_time {
+                point_data_writer.write_f64::<NativeEndian>(file.read_f64::<LittleEndian>()?)?;
+            }
+
+            if point_format.has_color {
+                point_data_writer.write_u16::<NativeEndian>(file.read_u16::<LittleEndian>()?)?;
+                point_data_writer.write_u16::<NativeEndian>(file.read_u16::<LittleEndian>()?)?;
+                point_data_writer.write_u16::<NativeEndian>(file.read_u16::<LittleEndian>()?)?;
+            }
+
+            if point_format.has_nir {
+                point_data_writer.write_u16::<NativeEndian>(file.read_u16::<LittleEndian>()?)?;
+            }
+
+            if point_format.has_waveform {
+                point_data_writer.write_u8(file.read_u8()?)?;
+                point_data_writer.write_u64::<NativeEndian>(file.read_u64::<LittleEndian>()?)?;
+                point_data_writer.write_u32::<NativeEndian>(file.read_u32::<LittleEndian>()?)?;
+                point_data_writer.write_f32::<NativeEndian>(file.read_f32::<LittleEndian>()?)?;
+                point_data_writer.write_f32::<NativeEndian>(file.read_f32::<LittleEndian>()?)?;
+                point_data_writer.write_f32::<NativeEndian>(file.read_f32::<LittleEndian>()?)?;
+                point_data_writer.write_f32::<NativeEndian>(file.read_f32::<LittleEndian>()?)?;
+            }
+        }
+
+        result_collector.collect(Box::new(buffer));
+
+        Ok(())
     }
 }
 
-fn parse_las_header<R: std::io::Read>(reader: R) -> Result<raw::Header> {
-    let raw_header = raw::Header::read_from(reader)?;
-    Ok(raw_header)
+/// Implementation of the 'Within' query for LAS files
+pub(crate) struct LasQueryAtomWithin<T> {
+    min: T,
+    max: T,
 }
 
-fn las_offset_to_color(point_record_format: u8) -> Option<u64> {
-    match point_record_format {
-        2 => Some(20),
-        3 => Some(28),
-        5 => Some(28),
-        _ => None,
+impl<T> LasQueryAtomWithin<T> {
+    pub(crate) fn new(min: T, max: T) -> Self {
+        Self { min, max }
     }
 }
 
-/**
- * Each type of search is implemented twice, once by using the pointstream crate (simulating a real-world use-case)
- * and once with a hand-rolled solution (simulating maximum efficiency)
- */
+/// Implementation of the 'Equals' query for LAS files
+pub(crate) struct LasQueryAtomEquals<T> {
+    value: T,
+}
 
-pub fn search_las_file_by_bounds_optimized<P: AsRef<Path>>(
-    path: P,
-    bounds: &AABB<f64>,
-    result_collector: &mut dyn ResultCollector,
-) -> Result<()> {
-    let mut reader = open_file_reader(path.as_ref())?;
+impl<T> LasQueryAtomEquals<T> {
+    pub(crate) fn new(value: T) -> Self {
+        Self { value }
+    }
+}
 
-    let raw_header = parse_las_header(&mut reader)?;
-    let header = Header::from_raw(raw_header.clone())?;
-    let file_bounds = AABB::from_min_max(
-        Point3::new(
-            header.bounds().min.x,
-            header.bounds().min.y,
-            header.bounds().min.z,
-        ),
-        Point3::new(
-            header.bounds().max.x,
-            header.bounds().max.y,
-            header.bounds().max.z,
-        ),
-    );
-    println!("Point record size: {}", raw_header.point_data_record_length);
-    let color_offset = las_offset_to_color(
-        header
-            .point_format()
-            .to_u8()
-            .context("Invalid point record format")?,
-    );
-    let color_offset_from_classification = color_offset.map(|o| o - 16); //Classification is always 16 bytes (in all non-extended LAS formats, which are the only ones supported in this experiment)
-
-    if !file_bounds.intersects(bounds) {
-        return Ok(());
+fn eval_impl<F: FnMut(usize) -> Result<bool>>(
+    block: Range<usize>,
+    matching_indices: &'_ mut [bool],
+    which_indices_to_loop_over: super::WhichIndicesToLoopOver,
+    mut test_point: F,
+) -> Result<usize> {
+    let mut num_matches = 0;
+    match which_indices_to_loop_over {
+        super::WhichIndicesToLoopOver::All => {
+            assert!(block.len() == matching_indices.len());
+            for point_index in block.clone() {
+                let local_index = point_index - block.start;
+                matching_indices[local_index] = test_point(point_index)?;
+                if matching_indices[local_index] {
+                    num_matches += 1;
+                }
+            }
+        }
+        super::WhichIndicesToLoopOver::Matching => {
+            for (local_index, is_match) in matching_indices
+                .iter_mut()
+                .enumerate()
+                .filter(|(_, is_match)| **is_match)
+            {
+                let point_index = local_index + block.start;
+                *is_match = test_point(point_index)?;
+                if *is_match {
+                    num_matches *= 1;
+                }
+            }
+        }
+        super::WhichIndicesToLoopOver::NotMatching => {
+            for (local_index, is_match) in matching_indices
+                .iter_mut()
+                .enumerate()
+                .filter(|(_, is_match)| !**is_match)
+            {
+                let point_index = local_index + block.start;
+                *is_match = test_point(point_index)?;
+                if *is_match {
+                    num_matches *= 1;
+                }
+            }
+        }
     }
 
-    // Convert bounds of query area into integer coordinates in local space of file. This makes intersection
-    // checks very fast because they can be done on integer values
-    let query_bounds_local = AABB::<i64>::from_min_max(
-        Point3::<i64>::new(
-            ((bounds.min().x - raw_header.x_offset) / raw_header.x_scale_factor) as i64,
-            ((bounds.min().y - raw_header.y_offset) / raw_header.x_scale_factor) as i64,
-            ((bounds.min().z - raw_header.z_offset) / raw_header.x_scale_factor) as i64,
-        ),
-        Point3::<i64>::new(
-            ((bounds.max().x - raw_header.x_offset) / raw_header.x_scale_factor) as i64,
-            ((bounds.max().y - raw_header.y_offset) / raw_header.y_scale_factor) as i64,
-            ((bounds.max().z - raw_header.z_offset) / raw_header.z_scale_factor) as i64,
-        ),
-    );
+    Ok(num_matches)
+}
 
-    for point_idx in 0..header.number_of_points() {
-        let point_offset: u64 = point_idx as u64 * raw_header.point_data_record_length as u64
-            + raw_header.offset_to_point_data as u64;
-        reader.seek(SeekFrom::Start(point_offset))?;
+impl CompiledQueryAtom for LasQueryAtomWithin<Position> {
+    fn eval(
+        &self,
+        file: &mut Cursor<Mmap>,
+        file_header: &pasture_io::las_rs::raw::Header,
+        block: Range<usize>,
+        matching_indices: &'_ mut [bool],
+        which_indices_to_loop_over: super::WhichIndicesToLoopOver,
+    ) -> Result<usize> {
+        let local_min = to_local_integer_position(&self.min.0, file_header);
+        let local_max = to_local_integer_position(&self.max.0, file_header);
 
-        let point_x = reader.read_i32::<LittleEndian>()? as i64;
-        if point_x < query_bounds_local.min().x || point_x > query_bounds_local.max().x {
-            continue;
-        }
+        let test_point = |point_index: usize| -> Result<bool> {
+            // Seek to point start, read X, Y, and Z in LAS i32 format and check
+            let point_offset: u64 = point_index as u64
+                * file_header.point_data_record_length as u64
+                + file_header.offset_to_point_data as u64;
+            file.seek(SeekFrom::Start(point_offset))?;
 
-        let point_y = reader.read_i32::<LittleEndian>()? as i64;
-        if point_y < query_bounds_local.min().y || point_y > query_bounds_local.max().y {
-            continue;
-        }
+            let local_x = file.read_i32::<LittleEndian>()?;
+            if local_x < local_min.x || local_x > local_max.x {
+                return Ok(false);
+            }
 
-        let point_z = reader.read_i32::<LittleEndian>()? as i64;
-        if point_z < query_bounds_local.min().z || point_z > query_bounds_local.max().z {
-            continue;
-        }
+            let local_y = file.read_i32::<LittleEndian>()?;
+            if local_y < local_min.y || local_y > local_max.y {
+                return Ok(false);
+            }
 
-        // Seek to classification
-        reader.seek(SeekFrom::Current(3))?;
+            let local_z = file.read_i32::<LittleEndian>()?;
+            if local_z < local_min.z || local_z > local_max.z {
+                return Ok(false);
+            }
 
-        let class = reader.read_u8()?;
-
-        // Seek to color (if it exists)
-        let color = if let Some(color_offset) = color_offset_from_classification {
-            reader.seek(SeekFrom::Current(color_offset as i64))?;
-            let r = reader.read_u16::<LittleEndian>()?;
-            let g = reader.read_u16::<LittleEndian>()?;
-            let b = reader.read_u16::<LittleEndian>()?;
-            Vector3::new(r, g, b)
-        } else {
-            Vector3::new(0, 0, 0)
+            Ok(true)
         };
 
-        result_collector.collect_one(Point {
-            position: Vector3::new(
-                (point_x as f64 * raw_header.x_scale_factor) + raw_header.x_offset,
-                (point_y as f64 * raw_header.y_scale_factor) + raw_header.y_offset,
-                (point_z as f64 * raw_header.z_scale_factor) + raw_header.z_offset,
-            ),
-            classification: class,
-            color,
-        });
+        eval_impl(
+            block,
+            matching_indices,
+            which_indices_to_loop_over,
+            test_point,
+        )
     }
-    Ok(())
 }
 
-pub fn search_las_file_by_bounds<P: AsRef<Path>>(
-    path: P,
-    bounds: &AABB<f64>,
-    result_collector: &mut dyn ResultCollector,
-) -> Result<()> {
-    let mmap = open_file_reader(path)?;
-
-    let mut reader = LASReader::from_read(mmap, false)?;
-
-    let metadata = reader.get_metadata().clone();
-    if !metadata
-        .bounds()
-        .expect("No bounds found in LAS file")
-        .intersects(&bounds)
-    {
-        return Ok(());
-    }
-
-    let number_of_points = metadata
-        .number_of_points()
-        .expect("No number of points found in LAS file");
-
-    // Read in chunks of fixed size
-    let chunk_size = 65536; //24 bytes per point ^= ~1.5MiB
-    let mut point_buffer = InterleavedVecPointStorage::with_capacity(chunk_size, Point::layout());
-
-    let num_chunks = (number_of_points + chunk_size - 1) / chunk_size;
-    for idx in 0..num_chunks {
-        let points_in_chunk = usize::min(chunk_size, number_of_points - (idx * chunk_size));
-        reader.read_into(&mut point_buffer, points_in_chunk)?;
-
-        point_buffer
-            .get_points_ref::<Point>(0..points_in_chunk)
-            .iter()
-            .filter(|point| bounds.contains(&point.position.into()))
-            .for_each(|point| {
-                result_collector.collect_one(point.clone());
-            });
-    }
-    Ok(())
-}
-
-pub fn search_las_file_by_classification_optimized<P: AsRef<Path>>(
-    path: P,
-    class: u8,
-    result_collector: &mut dyn ResultCollector,
-) -> Result<()> {
-    let mut reader = open_file_reader(&path)?;
-
-    let raw_header = parse_las_header(&mut reader)?;
-    let header = Header::from_raw(raw_header.clone())?;
-
-    let offset_to_classification_in_point = match raw_header.point_data_record_format {
-        0..=5 => 15,
-        6..=10 => 16,
-        _ => {
-            return Err(anyhow!(
-                "Invalid LAS format {} in file {}",
-                raw_header.point_data_record_format,
-                path.as_ref().display()
-            ))
-        }
-    };
-
-    let offset_to_color_in_point = match raw_header.point_data_record_format {
-        2 => Some(20),
-        3 => Some(28),
-        5 => Some(28),
-        _ => None,
-    };
-
-    for point_idx in 0..header.number_of_points() {
-        let point_offset: u64 = point_idx as u64 * raw_header.point_data_record_length as u64
-            + raw_header.offset_to_point_data as u64;
-        reader.seek(SeekFrom::Start(
-            point_offset + offset_to_classification_in_point,
-        ))?;
-
-        let classification = reader.read_u8()?;
-        if classification != class {
-            continue;
-        }
-
-        // Read position
-        reader.seek(SeekFrom::Start(point_offset))?;
-        let point_x = reader.read_i32::<LittleEndian>()?;
-        let point_y = reader.read_i32::<LittleEndian>()?;
-        let point_z = reader.read_i32::<LittleEndian>()?;
-
-        // Try to read color (if supported)
-        let color = if let Some(color_offset) = offset_to_color_in_point {
-            reader.seek(SeekFrom::Start(point_offset + color_offset))?;
-            let r = reader.read_u16::<LittleEndian>()?;
-            let g = reader.read_u16::<LittleEndian>()?;
-            let b = reader.read_u16::<LittleEndian>()?;
-            Vector3::new(r, g, b)
+impl CompiledQueryAtom for LasQueryAtomWithin<Classification> {
+    fn eval(
+        &self,
+        file: &mut Cursor<Mmap>,
+        file_header: &pasture_io::las_rs::raw::Header,
+        block: Range<usize>,
+        matching_indices: &'_ mut [bool],
+        which_indices_to_loop_over: super::WhichIndicesToLoopOver,
+    ) -> Result<usize> {
+        let offset_to_classification = if file_header.point_data_record_format > 5 {
+            16
         } else {
-            Vector3::new(0, 0, 0)
+            15
         };
 
-        result_collector.collect_one(Point {
-            position: Vector3::new(
-                (point_x as f64 * raw_header.x_scale_factor) + raw_header.x_offset,
-                (point_y as f64 * raw_header.y_scale_factor) + raw_header.y_offset,
-                (point_z as f64 * raw_header.z_scale_factor) + raw_header.z_offset,
-            ),
-            classification: classification,
-            color,
-        });
+        let test_point = |point_index: usize| -> Result<bool> {
+            // Seek to point start, read X, Y, and Z in LAS i32 format and check
+            let point_offset: u64 = point_index as u64
+                * file_header.point_data_record_length as u64
+                + file_header.offset_to_point_data as u64;
+            file.seek(SeekFrom::Start(point_offset + offset_to_classification))?;
+
+            let classification = file.read_u8()?;
+            Ok(classification >= self.min.0 && classification < self.max.0)
+        };
+
+        eval_impl(
+            block,
+            matching_indices,
+            which_indices_to_loop_over,
+            test_point,
+        )
     }
-    Ok(())
 }
 
-pub fn search_las_file_by_classification<P: AsRef<Path>>(
-    path: P,
-    class: u8,
-    result_collector: &mut dyn ResultCollector,
-) -> Result<()> {
-    let mmap = open_file_reader(path)?;
+impl CompiledQueryAtom for LasQueryAtomEquals<Position> {
+    fn eval(
+        &self,
+        file: &mut Cursor<Mmap>,
+        file_header: &pasture_io::las_rs::raw::Header,
+        block: Range<usize>,
+        matching_indices: &'_ mut [bool],
+        which_indices_to_loop_over: super::WhichIndicesToLoopOver,
+    ) -> Result<usize> {
+        let local_position = to_local_integer_position(&self.value.0, file_header);
+        let test_point = |point_index: usize| -> Result<bool> {
+            // Seek to point start, read X, Y, and Z in LAS i32 format and check
+            let point_offset: u64 = point_index as u64
+                * file_header.point_data_record_length as u64
+                + file_header.offset_to_point_data as u64;
+            file.seek(SeekFrom::Start(point_offset))?;
 
-    let mut reader = LASReader::from_read(mmap, false)?;
+            let local_x = file.read_i32::<LittleEndian>()?;
+            if local_x != local_position.x {
+                return Ok(false);
+            }
 
-    let metadata = reader.get_metadata().clone();
-    let number_of_points = metadata
-        .number_of_points()
-        .expect("No number of points found in LAS file");
+            let local_y = file.read_i32::<LittleEndian>()?;
+            if local_y != local_position.y {
+                return Ok(false);
+            }
 
-    // Read in chunks of fixed size
-    let chunk_size = 65536; //24 bytes per point ^= ~1.5MiB
-    let mut point_buffer = InterleavedVecPointStorage::with_capacity(chunk_size, Point::layout());
+            let local_z = file.read_i32::<LittleEndian>()?;
+            if local_z != local_position.z {
+                return Ok(false);
+            }
 
-    let num_chunks = (number_of_points + chunk_size - 1) / chunk_size;
-    for idx in 0..num_chunks {
-        let points_in_chunk = usize::min(chunk_size, number_of_points - (idx * chunk_size));
-        reader.read_into(&mut point_buffer, points_in_chunk)?;
+            Ok(true)
+        };
 
-        point_buffer
-            .get_points_ref::<Point>(0..points_in_chunk)
-            .iter()
-            .filter(|point| point.classification == class)
-            .for_each(|point| {
-                result_collector.collect_one(point.clone());
-            });
+        eval_impl(
+            block,
+            matching_indices,
+            which_indices_to_loop_over,
+            test_point,
+        )
     }
-    Ok(())
 }
 
-pub fn _search_las_file_by_time_range_optimized<P: AsRef<Path>>(
-    path: P,
-    time_range: Range<f64>,
-    result_collector: &mut dyn ResultCollector,
-) -> Result<()> {
-    let mut reader = open_file_reader(&path)?;
+impl CompiledQueryAtom for LasQueryAtomEquals<Classification> {
+    fn eval(
+        &self,
+        file: &mut Cursor<Mmap>,
+        file_header: &pasture_io::las_rs::raw::Header,
+        block: Range<usize>,
+        matching_indices: &'_ mut [bool],
+        which_indices_to_loop_over: super::WhichIndicesToLoopOver,
+    ) -> Result<usize> {
+        let offset_to_classification = if file_header.point_data_record_format > 5 {
+            16
+        } else {
+            15
+        };
 
-    let raw_header = parse_las_header(&mut reader)?;
-    let header = Header::from_raw(raw_header.clone())?;
+        let test_point = |point_index: usize| -> Result<bool> {
+            // Seek to point start, read X, Y, and Z in LAS i32 format and check
+            let point_offset: u64 = point_index as u64
+                * file_header.point_data_record_length as u64
+                + file_header.offset_to_point_data as u64;
+            file.seek(SeekFrom::Start(point_offset + offset_to_classification))?;
 
-    let offset_to_gps_time_in_point = match raw_header.point_data_record_format {
-        0 => {
-            return Err(anyhow!(
-                "File {} does not contain GPS times!",
-                path.as_ref().display()
-            ))
-        }
-        1 => 20,
-        2 => {
-            return Err(anyhow!(
-                "File {} does not contain GPS times!",
-                path.as_ref().display()
-            ))
-        }
-        3..=5 => 20,
-        6..=10 => 22,
-        _ => {
-            return Err(anyhow!(
-                "Invalid LAS format {} in file {}",
-                raw_header.point_data_record_format,
-                path.as_ref().display()
-            ))
-        }
-    };
+            let classification = file.read_u8()?;
+            Ok(classification == self.value.0)
+        };
 
-    for point_idx in 0..header.number_of_points() {
-        let point_offset: u64 = point_idx as u64 * raw_header.point_data_record_length as u64
-            + raw_header.offset_to_point_data as u64;
-        reader.seek(SeekFrom::Start(point_offset + offset_to_gps_time_in_point))?;
-
-        let gps_time = reader.read_f64::<LittleEndian>()?;
-        if !time_range.contains(&gps_time) {
-            continue;
-        }
-
-        // Now we read XYZ
-        reader.seek(SeekFrom::Start(point_offset))?;
-        let point_x = reader.read_i32::<LittleEndian>()?;
-        let point_y = reader.read_i32::<LittleEndian>()?;
-        let point_z = reader.read_i32::<LittleEndian>()?;
-
-        result_collector.collect_one(Point {
-            position: Vector3::new(
-                (point_x as f64 * raw_header.x_scale_factor) + raw_header.x_offset,
-                (point_y as f64 * raw_header.y_scale_factor) + raw_header.y_offset,
-                (point_z as f64 * raw_header.z_scale_factor) + raw_header.z_offset,
-            ),
-            ..Default::default()
-        });
+        eval_impl(
+            block,
+            matching_indices,
+            which_indices_to_loop_over,
+            test_point,
+        )
     }
-    Ok(())
-}
-
-pub fn _search_las_file_by_time_range<P: AsRef<Path>>(
-    _path: P,
-    _time_range: Range<f64>,
-    _result_collector: &mut dyn ResultCollector,
-) -> Result<()> {
-    // PointStream does not yet support GPS time
-    todo!("not implemented")
 }

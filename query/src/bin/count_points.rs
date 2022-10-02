@@ -1,13 +1,11 @@
 use std::{
-    fs::{read_dir, File},
-    io::BufReader,
+    fs::read_dir,
     path::{Path, PathBuf},
 };
 
 use anyhow::{anyhow, Context, Result};
 use clap::{value_t, App, Arg};
 use pasture_io::base::IOFactory;
-use readers::{LASTReader, LAZERSource};
 
 fn get_all_input_files<P: AsRef<Path>>(path: P) -> Result<Vec<PathBuf>> {
     let input_path = path.as_ref();
@@ -51,15 +49,15 @@ fn get_all_input_files<P: AsRef<Path>>(path: P) -> Result<Vec<PathBuf>> {
 }
 
 fn get_reader_factory() -> IOFactory {
-    let mut reader_factory = IOFactory::default();
-    reader_factory.register_reader_for_extension("last", |path| {
-        let reader = LASTReader::from(BufReader::new(File::open(path)?))?;
-        Ok(Box::new(reader))
-    });
-    reader_factory.register_reader_for_extension("lazer", |path| {
-        let reader = LAZERSource::from(BufReader::new(File::open(path)?))?;
-        Ok(Box::new(reader))
-    });
+    let reader_factory = IOFactory::default();
+    // reader_factory.register_reader_for_extension("last", |path| {
+    //     let reader = LASTReader::from(BufReader::new(File::open(path)?))?;
+    //     Ok(Box::new(reader))
+    // });
+    // reader_factory.register_reader_for_extension("lazer", |path| {
+    //     let reader = LAZERSource::from(BufReader::new(File::open(path)?))?;
+    //     Ok(Box::new(reader))
+    // });
     reader_factory
 }
 

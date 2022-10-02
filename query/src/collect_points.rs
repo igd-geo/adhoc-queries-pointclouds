@@ -1,45 +1,31 @@
 use anyhow::Result;
-use pasture_core::math::AABB;
+use pasture_core::{math::AABB, containers::PointBuffer};
 
 use crate::grid_sampling::SparseGrid;
 use readers::Point;
 
 pub trait ResultCollector {
-    fn collect_one(&mut self, point: Point);
-    fn points(&self) -> Option<Vec<Point>>;
-    fn points_ref(&self) -> Option<&[Point]>;
+    fn collect(&mut self, points: Box<dyn PointBuffer>);
     fn point_count(&self) -> usize;
 }
 
 pub struct BufferCollector {
-    buffer: Vec<Point>,
+    buffers: Vec<Box<dyn PointBuffer>>,
 }
 
 impl BufferCollector {
     pub fn new() -> Self {
-        Self { buffer: Vec::new() }
-    }
-
-    pub fn buffer(&self) -> &[Point] {
-        &self.buffer[..]
+        Self { buffers: Vec::new() }
     }
 }
 
 impl ResultCollector for BufferCollector {
-    fn collect_one(&mut self, point: Point) {
-        self.buffer.push(point);
-    }
-
-    fn points(&self) -> Option<Vec<Point>> {
-        Some(self.buffer().to_vec())
-    }
-
-    fn points_ref(&self) -> Option<&[Point]> {
-        Some(&self.buffer())
-    }
-
     fn point_count(&self) -> usize {
-        self.buffer().len()
+        self.buffers.iter().map(|buf| buf.len()).sum()
+    }
+
+    fn collect(&mut self, points: Box<dyn PointBuffer>) {
+        self.buffers.push(points);
     }
 }
 
@@ -52,20 +38,12 @@ impl StdOutCollector {
 }
 
 impl ResultCollector for StdOutCollector {
-    fn collect_one(&mut self, point: Point) {
-        println!("Found point: {:#?}", point);
-    }
-
-    fn points(&self) -> Option<Vec<Point>> {
-        None
-    }
-
-    fn points_ref(&self) -> Option<&[Point]> {
-        None
-    }
-
     fn point_count(&self) -> usize {
         0
+    }
+
+    fn collect(&mut self, points: Box<dyn PointBuffer>) {
+        unimplemented!()
     }
 }
 
@@ -80,20 +58,12 @@ impl CountCollector {
 }
 
 impl ResultCollector for CountCollector {
-    fn collect_one(&mut self, _: Point) {
-        self.point_count += 1;
-    }
-
-    fn points(&self) -> Option<Vec<Point>> {
-        None
-    }
-
-    fn points_ref(&self) -> Option<&[Point]> {
-        None
-    }
-
     fn point_count(&self) -> usize {
         self.point_count
+    }
+
+    fn collect(&mut self, points: Box<dyn PointBuffer>) {
+        self.point_count += points.len();
     }
 }
 
@@ -109,19 +79,11 @@ impl GridSampledCollector {
 }
 
 impl ResultCollector for GridSampledCollector {
-    fn collect_one(&mut self, point: Point) {
-        self.grid.insert_point(point);
-    }
-
-    fn points(&self) -> Option<Vec<Point>> {
-        Some(self.grid.points().map(|p| p.clone()).collect())
-    }
-
-    fn points_ref(&self) -> Option<&[Point]> {
-        None
-    }
-
     fn point_count(&self) -> usize {
         self.grid.points().count()
+    }
+
+    fn collect(&mut self, points: Box<dyn PointBuffer>) {
+        unimplemented!()
     }
 }
