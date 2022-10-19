@@ -2,6 +2,7 @@ use std::{io::Cursor, ops::Range};
 
 use anyhow::{bail, Result};
 use memmap::Mmap;
+use pasture_core::containers::PointBuffer;
 use pasture_io::las_rs::raw::Header;
 
 use crate::{
@@ -32,8 +33,7 @@ pub trait Extractor {
         block: Range<usize>,
         matching_indices: &mut [bool],
         num_matches: usize,
-        result_collector: &mut dyn ResultCollector,
-    ) -> Result<()>;
+    ) -> Result<Box<dyn PointBuffer>>;
 }
 
 /// Evaluating a query atom calculates matching indices. In the base case, we iterate over `block`, which is a range describing the point indices
@@ -130,14 +130,9 @@ pub fn query_block(
     if num_matches == 0 {
         return Ok(());
     }
-    extractor.extract_data(
-        file,
-        file_header,
-        block,
-        matching_indices,
-        num_matches,
-        result_collector,
-    )
+    let points = extractor.extract_data(file, file_header, block, matching_indices, num_matches)?;
+    result_collector.collect(points);
+    Ok(())
 }
 
 pub(crate) fn compile_query(

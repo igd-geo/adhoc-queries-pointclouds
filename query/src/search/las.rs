@@ -6,7 +6,9 @@ use anyhow::Result;
 use byteorder::{LittleEndian, NativeEndian, ReadBytesExt, WriteBytesExt};
 use memmap::Mmap;
 use pasture_core::{
-    containers::{InterleavedPointBufferMut, InterleavedVecPointStorage, PointBufferWriteable},
+    containers::{
+        InterleavedPointBufferMut, InterleavedVecPointStorage, PointBuffer, PointBufferWriteable,
+    },
     nalgebra::{clamp, Vector3},
 };
 use pasture_io::{
@@ -45,8 +47,7 @@ impl Extractor for LASExtractor {
         block: Range<usize>,
         matching_indices: &mut [bool],
         num_matches: usize,
-        result_collector: &mut dyn ResultCollector,
-    ) -> Result<()> {
+    ) -> Result<Box<dyn PointBuffer>> {
         let point_format =
             Format::new(file_header.point_data_record_format).expect("Invalid point format");
         let mut buffer = InterleavedVecPointStorage::with_capacity(
@@ -54,6 +55,9 @@ impl Extractor for LASExtractor {
             point_layout_from_las_point_format(&point_format)?,
         );
         buffer.resize(num_matches);
+
+        let num_matches_counted: usize = matching_indices.iter().filter(|b| **b).count();
+        assert_eq!(num_matches, num_matches_counted);
 
         let mut current_point = 0;
         for (relative_index, _) in matching_indices
@@ -161,9 +165,7 @@ impl Extractor for LASExtractor {
             }
         }
 
-        result_collector.collect(Box::new(buffer));
-
-        Ok(())
+        Ok(Box::new(buffer))
     }
 }
 
@@ -199,7 +201,7 @@ fn eval_impl<F: FnMut(usize) -> Result<bool>>(
     let mut num_matches = 0;
     match which_indices_to_loop_over {
         super::WhichIndicesToLoopOver::All => {
-            assert!(block.len() == matching_indices.len());
+            assert!(block.len() <= matching_indices.len());
             for point_index in block.clone() {
                 let local_index = point_index - block.start;
                 matching_indices[local_index] = test_point(point_index)?;
@@ -217,7 +219,7 @@ fn eval_impl<F: FnMut(usize) -> Result<bool>>(
                 let point_index = local_index + block.start;
                 *is_match = test_point(point_index)?;
                 if *is_match {
-                    num_matches *= 1;
+                    num_matches += 1;
                 }
             }
         }
@@ -230,7 +232,7 @@ fn eval_impl<F: FnMut(usize) -> Result<bool>>(
                 let point_index = local_index + block.start;
                 *is_match = test_point(point_index)?;
                 if *is_match {
-                    num_matches *= 1;
+                    num_matches += 1;
                 }
             }
         }

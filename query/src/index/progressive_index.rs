@@ -17,20 +17,23 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use itertools::Itertools;
+use log::info;
 use memmap::Mmap;
-use pasture_io::{base::IOFactory, las::LASReader};
+use pasture_io::{base::IOFactory, las_rs::raw};
 use std::{
     collections::HashMap,
     ffi::OsStr,
     fs::File,
     io::Cursor,
     path::{Path, PathBuf},
+    time::Instant,
 };
 
-use super::{Block, BlockIndex, Query};
+use super::{Block, BlockIndex, PositionIndex, Query, ValueType};
 use crate::{
     collect_points::ResultCollector,
     search::{compile_query, Extractor, LASExtractor, WhichIndicesToLoopOver},
+    stats::QueryStats,
 };
 
 struct KnownDataset {
@@ -53,6 +56,7 @@ impl ProgressiveIndex {
     }
 
     pub fn add_dataset(&mut self, files: Vec<PathBuf>) -> Result<DatasetID> {
+        info!("Adding new dataset");
         let id = self.datasets.len();
         let (index, common_file_extension) = build_initial_block_index(&files)
             .context("Failed do build initial index for dataset")?;
@@ -72,7 +76,10 @@ impl ProgressiveIndex {
         dataset_id: DatasetID,
         query: Query,
         result_collector: &mut dyn ResultCollector,
-    ) -> Result<()> {
+    ) -> Result<QueryStats> {
+        info!("Querying dataset {}", dataset_id);
+        let timer = Instant::now();
+
         let dataset = self.datasets.get(&dataset_id).expect("Unknown dataset");
         let compiled_query =
             compile_query(&query, &dataset.common_file_extension).context(format!(
@@ -93,34 +100,46 @@ impl ProgressiveIndex {
             .get_matching_blocks(&query)
             .group_by(|(block, _)| block.file_id());
 
-        let mut all_matching_indices = vec![true; INITIAL_BLOCK_SIZE];
+        let largest_block = dataset
+            .index
+            .largest_block()
+            .expect("There are no blocks in the index")
+            .len();
+        let mut all_matching_indices = vec![true; largest_block];
+
+        let mut partial_match_blocks = 0;
+        let mut full_match_blocks = 0;
+        let mut total_points_queried = 0;
+        let mut matching_points = 0;
 
         for (file_id, blocks) in &blocks_per_file {
             let path = dataset.files[file_id].as_path();
-            let file_header = LASReader::from_path(path)
-                .context("Can't open LAS file")?
-                .header()
-                .to_owned();
-            let raw_header = file_header.into_raw().context("Can't get raw LAS header")?;
 
             let file = File::open(path).context("Can't open file")?;
             let file_mmap = unsafe { Mmap::map(&file).context("Can't mmap file")? };
             let mut cursor = Cursor::new(file_mmap);
+            let raw_header =
+                raw::Header::read_from(&mut cursor).context("Can't read LAS header")?;
 
             for (block, index_result) in blocks {
                 // IndexResult will be either partial match or full match
                 match index_result {
                     super::IndexResult::MatchAll => {
-                        data_extractor
+                        let data = data_extractor
                             .extract_data(
                                 &mut cursor,
                                 &raw_header,
                                 block.point_range(),
                                 &mut all_matching_indices,
                                 block.len(),
-                                result_collector,
                             )
                             .context("Failed to extract data for block")?;
+
+                        result_collector.collect(data);
+
+                        full_match_blocks += 1;
+                        total_points_queried += block.len();
+                        matching_points += block.len();
                     }
                     super::IndexResult::MatchSome => {
                         // We have to run the actual query on this block where only some indices match
@@ -133,16 +152,21 @@ impl ProgressiveIndex {
                             block.len(),
                             WhichIndicesToLoopOver::All,
                         )?;
-                        data_extractor
+                        let data = data_extractor
                             .extract_data(
                                 &mut cursor,
                                 &raw_header,
                                 block.point_range(),
-                                &mut all_matching_indices,
+                                &mut all_matching_indices[..block.len()],
                                 num_matches,
-                                result_collector,
                             )
                             .context("Failed to extract data for block")?;
+
+                        result_collector.collect(data);
+
+                        partial_match_blocks += 1;
+                        total_points_queried += block.len();
+                        matching_points += num_matches;
                     }
                     _ => panic!(
                         "get_matching_blocks should not return a block with IndexResult::NoMatch"
@@ -151,11 +175,25 @@ impl ProgressiveIndex {
             }
         }
 
-        Ok(())
+        // info!(
+        //     "Blocks queried: {} full, {} partial ({} total in dataset)",
+        //     full_match_blocks,
+        //     partial_match_blocks,
+        //     dataset.index.blocks_count()
+        // );
+
+        Ok(QueryStats {
+            total_blocks_queried: dataset.index.blocks_count(),
+            full_match_blocks,
+            partial_match_blocks,
+            total_points_queried,
+            matching_points,
+            runtime: timer.elapsed(),
+        })
     }
 }
 
-const INITIAL_BLOCK_SIZE: usize = 50_000; // Same size as the default LAZ block size
+// const INITIAL_BLOCK_SIZE: usize = 50_000; // Same size as the default LAZ block size
 
 fn build_initial_block_index<P: AsRef<Path>>(files: &'_ [P]) -> Result<(BlockIndex, String)> {
     let common_extension =
@@ -171,12 +209,24 @@ fn build_initial_block_index<P: AsRef<Path>>(files: &'_ [P]) -> Result<(BlockInd
             .get_metadata()
             .number_of_points()
             .ok_or(anyhow!("Can't determine number of points"))?;
-        let num_blocks = (point_count + INITIAL_BLOCK_SIZE - 1) / INITIAL_BLOCK_SIZE;
-        for block_idx in 0..num_blocks {
-            let block_start = block_idx * INITIAL_BLOCK_SIZE;
-            let block_end = (block_start + INITIAL_BLOCK_SIZE).min(point_count);
-            blocks.push(Block::new(block_start..block_end, file_id));
-        }
+        let bounds = reader
+            .get_metadata()
+            .bounds()
+            .ok_or(anyhow!("Can't get bounds"))?;
+        // let num_blocks = (point_count + INITIAL_BLOCK_SIZE - 1) / INITIAL_BLOCK_SIZE;
+        // for block_idx in 0..num_blocks {
+        //     let block_start = block_idx * INITIAL_BLOCK_SIZE;
+        //     let block_end = (block_start + INITIAL_BLOCK_SIZE).min(point_count);
+        //     blocks.push(Block::new(block_start..block_end, file_id));
+        // }
+
+        // Create one block per file and add a position index to it (we can do that because we have the bounds in the LAS header)
+        let mut block = Block::new(0..point_count, file_id);
+        let position_index = PositionIndex::new(bounds);
+        block
+            .indices_mut()
+            .insert(ValueType::Position3D, Box::new(position_index));
+        blocks.push(block);
     }
 
     Ok((

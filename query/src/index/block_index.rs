@@ -16,7 +16,7 @@ impl PositionIndex {
 }
 
 impl Index for PositionIndex {
-    fn within(&self, range: &Range<Value>, num_points_in_block: usize) -> IndexResult {
+    fn within(&self, range: &Range<Value>, _num_points_in_block: usize) -> IndexResult {
         match (&range.start, &range.end) {
             (Value::Position(min_pos), Value::Position(max_pos)) => {
                 let other_bounds =
@@ -42,7 +42,7 @@ impl Index for PositionIndex {
         }
     }
 
-    fn equals(&self, _data: &Value, num_points_in_block: usize) -> IndexResult {
+    fn equals(&self, _data: &Value, _num_points_in_block: usize) -> IndexResult {
         unimplemented!()
     }
 }
@@ -178,5 +178,13 @@ impl BlockIndex {
 
     pub fn add_block(&mut self, block: Block) {
         self.blocks.push(block);
+    }
+
+    pub fn blocks_count(&self) -> usize {
+        self.blocks.len()
+    }
+
+    pub fn largest_block(&self) -> Option<&Block> {
+        self.blocks.iter().max_by_key(|block| block.len())
     }
 }
