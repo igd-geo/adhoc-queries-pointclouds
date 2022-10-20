@@ -34,7 +34,7 @@ impl IndexResult {
     }
 }
 
-pub trait Index {
+pub trait Index: Send + Sync {
     fn within(&self, range: &Range<Value>, num_points_in_block: usize) -> IndexResult;
     fn equals(&self, data: &Value, num_points_in_block: usize) -> IndexResult;
 }

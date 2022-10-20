@@ -1,23 +1,21 @@
 use std::{io::Cursor, ops::Range};
 
 use anyhow::{bail, Result};
-use memmap::Mmap;
-use pasture_core::containers::PointBuffer;
 use pasture_io::las_rs::raw::Header;
 
 use crate::{
-    collect_points::ResultCollector,
-    index::{Query, QueryExpression, Value},
+    collect_points::{PointBufferSend, ResultCollector},
+    index::{QueryExpression, Value},
 };
 
 use super::{LasQueryAtomEquals, LasQueryAtomWithin};
 
 /// A single piece of a query compiled into an optimized format so that we can pass it the raw memory of a file (LAS, LAZ, LAST, etc.)
 /// together with the file header. Evaluating a query atom sets all matching indices in `matching_indices` to true
-pub trait CompiledQueryAtom {
+pub trait CompiledQueryAtom: Sync + Send {
     fn eval(
         &self,
-        file: &mut Cursor<Mmap>,
+        file: &mut Cursor<&[u8]>,
         file_header: &Header,
         block: Range<usize>,
         matching_indices: &'_ mut [bool],
@@ -28,12 +26,12 @@ pub trait CompiledQueryAtom {
 pub trait Extractor {
     fn extract_data(
         &self,
-        file: &mut Cursor<Mmap>,
+        file: &mut Cursor<&[u8]>,
         file_header: &Header,
         block: Range<usize>,
         matching_indices: &mut [bool],
         num_matches: usize,
-    ) -> Result<Box<dyn PointBuffer>>;
+    ) -> Result<Box<dyn PointBufferSend>>;
 }
 
 /// Evaluating a query atom calculates matching indices. In the base case, we iterate over `block`, which is a range describing the point indices
@@ -56,7 +54,7 @@ pub enum CompiledQueryExpression {
 impl CompiledQueryExpression {
     pub fn eval<'a>(
         &self,
-        file: &mut Cursor<Mmap>,
+        file: &mut Cursor<&[u8]>,
         file_header: &Header,
         block: Range<usize>,
         matching_indices: &'a mut [bool],
@@ -111,7 +109,7 @@ impl CompiledQueryExpression {
 
 /// Query the given block using the given compiled query. Data is extracted using the file-format-specific extractor and sent to result_collector
 pub fn query_block(
-    file: &mut Cursor<Mmap>,
+    file: &mut Cursor<&[u8]>,
     file_header: &Header,
     block: Range<usize>,
     matching_indices: &mut [bool],

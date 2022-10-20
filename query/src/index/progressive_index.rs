@@ -16,16 +16,20 @@
 //      3.5) Implement some refinement procedure that generates or improves the index for each block (this is TBD)
 
 use anyhow::{anyhow, bail, Context, Result};
-use itertools::Itertools;
 use log::info;
 use memmap::Mmap;
 use pasture_io::{base::IOFactory, las_rs::raw};
+use rayon::prelude::*;
 use std::{
     collections::HashMap,
     ffi::OsStr,
     fs::File,
     io::Cursor,
     path::{Path, PathBuf},
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Arc, Mutex,
+    },
     time::Instant,
 };
 
@@ -75,7 +79,7 @@ impl ProgressiveIndex {
         &mut self,
         dataset_id: DatasetID,
         query: Query,
-        result_collector: &mut dyn ResultCollector,
+        result_collector: Arc<Mutex<dyn ResultCollector>>,
     ) -> Result<QueryStats> {
         info!("Querying dataset {}", dataset_id);
         let timer = Instant::now();
@@ -95,85 +99,109 @@ impl ProgressiveIndex {
         };
 
         // Query with index to get matching blocks, group the blocks by their file
-        let blocks_per_file = dataset
-            .index
-            .get_matching_blocks(&query)
-            .group_by(|(block, _)| block.file_id());
+        let blocks = dataset.index.get_matching_blocks(&query);
+        let mut blocks_per_file: HashMap<usize, Vec<_>> = HashMap::new();
+        for (block, query_result) in blocks {
+            if let Some(blocks_of_file) = blocks_per_file.get_mut(&block.file_id()) {
+                blocks_of_file.push((block.len(), block.point_range(), query_result));
+            } else {
+                blocks_per_file.insert(
+                    block.file_id(),
+                    vec![(block.len(), block.point_range(), query_result)],
+                );
+            }
+        }
 
         let largest_block = dataset
             .index
             .largest_block()
             .expect("There are no blocks in the index")
             .len();
-        let mut all_matching_indices = vec![true; largest_block];
+        let all_matching_indices = vec![true; largest_block];
 
-        let mut partial_match_blocks = 0;
-        let mut full_match_blocks = 0;
-        let mut total_points_queried = 0;
-        let mut matching_points = 0;
+        let partial_match_blocks = AtomicUsize::new(0);
+        let full_match_blocks = AtomicUsize::new(0);
+        let total_points_queried = AtomicUsize::new(0);
+        let matching_points = AtomicUsize::new(0);
 
-        for (file_id, blocks) in &blocks_per_file {
-            let path = dataset.files[file_id].as_path();
+        blocks_per_file
+            .into_par_iter()
+            .map(|(file_id, blocks)| -> Result<()> {
+                let path = dataset.files[file_id].as_path();
 
-            let file = File::open(path).context("Can't open file")?;
-            let file_mmap = unsafe { Mmap::map(&file).context("Can't mmap file")? };
-            let mut cursor = Cursor::new(file_mmap);
-            let raw_header =
-                raw::Header::read_from(&mut cursor).context("Can't read LAS header")?;
+                let file = File::open(path).context("Can't open file")?;
+                let file_mmap = unsafe { Mmap::map(&file).context("Can't mmap file")? };
+                let file_data: &[u8] = &file_mmap;
 
-            for (block, index_result) in blocks {
-                // IndexResult will be either partial match or full match
-                match index_result {
-                    super::IndexResult::MatchAll => {
-                        let data = data_extractor
-                            .extract_data(
-                                &mut cursor,
-                                &raw_header,
-                                block.point_range(),
-                                &mut all_matching_indices,
-                                block.len(),
-                            )
-                            .context("Failed to extract data for block")?;
+                let raw_header = raw::Header::read_from(&mut Cursor::new(file_data))
+                    .context("Can't read LAS header")?;
 
-                        result_collector.collect(data);
+                blocks
+                    .into_par_iter()
+                    .map_with(
+                        all_matching_indices.clone(),
+                        |all_matching_indices,
+                         (block_length, block_point_range, index_result)|
+                         -> Result<()> {
+                            let mut cursor = Cursor::new(file_data);
+                            // IndexResult will be either partial match or full match
+                            match index_result {
+                                super::IndexResult::MatchAll => {
+                                    let data = data_extractor
+                                        .extract_data(
+                                            &mut cursor,
+                                            &raw_header,
+                                            block_point_range,
+                                            all_matching_indices,
+                                            block_length,
+                                        )
+                                        .context("Failed to extract data for block")?;
 
-                        full_match_blocks += 1;
-                        total_points_queried += block.len();
-                        matching_points += block.len();
-                    }
-                    super::IndexResult::MatchSome => {
-                        // We have to run the actual query on this block where only some indices match
-                        // eval() will correctly set the valid indices in 'all_matching_indices', so we don't have to reset this array in every loop iteration
-                        let num_matches = compiled_query.eval(
-                            &mut cursor,
-                            &raw_header,
-                            block.point_range(),
-                            &mut all_matching_indices,
-                            block.len(),
-                            WhichIndicesToLoopOver::All,
-                        )?;
-                        let data = data_extractor
-                            .extract_data(
-                                &mut cursor,
-                                &raw_header,
-                                block.point_range(),
-                                &mut all_matching_indices[..block.len()],
-                                num_matches,
-                            )
-                            .context("Failed to extract data for block")?;
+                                    result_collector.lock().unwrap().collect(data);
 
-                        result_collector.collect(data);
+                                    full_match_blocks.fetch_add(1, Ordering::SeqCst);
+                                    total_points_queried.fetch_add(block_length, Ordering::SeqCst);
+                                    matching_points.fetch_add(block_length, Ordering::SeqCst);
+                                }
+                                super::IndexResult::MatchSome => {
+                                    // We have to run the actual query on this block where only some indices match
+                                    // eval() will correctly set the valid indices in 'all_matching_indices', so we don't have to reset this array in every loop iteration
+                                    let num_matches = compiled_query.eval(
+                                        &mut cursor,
+                                        &raw_header,
+                                        block_point_range.clone(),
+                                        all_matching_indices,
+                                        block_length,
+                                        WhichIndicesToLoopOver::All,
+                                    )?;
+                                    let data = data_extractor
+                                        .extract_data(
+                                            &mut cursor,
+                                            &raw_header,
+                                            block_point_range.clone(),
+                                            &mut all_matching_indices[..block_length],
+                                            num_matches,
+                                        )
+                                        .context("Failed to extract data for block")?;
 
-                        partial_match_blocks += 1;
-                        total_points_queried += block.len();
-                        matching_points += num_matches;
-                    }
-                    _ => panic!(
+                                    result_collector.lock().unwrap().collect(data);
+
+                                    partial_match_blocks.fetch_add(1, Ordering::SeqCst);
+                                    total_points_queried.fetch_add(block_length, Ordering::SeqCst);
+                                    matching_points.fetch_add(num_matches, Ordering::SeqCst);
+                                }
+                                _ => panic!(
                         "get_matching_blocks should not return a block with IndexResult::NoMatch"
                     ),
-                }
-            }
-        }
+                            }
+                            Ok(())
+                        },
+                    )
+                    .collect::<Result<_>>()?;
+
+                Ok(())
+            })
+            .collect::<Result<_>>()?;
 
         // info!(
         //     "Blocks queried: {} full, {} partial ({} total in dataset)",
@@ -184,10 +212,10 @@ impl ProgressiveIndex {
 
         Ok(QueryStats {
             total_blocks_queried: dataset.index.blocks_count(),
-            full_match_blocks,
-            partial_match_blocks,
-            total_points_queried,
-            matching_points,
+            full_match_blocks: full_match_blocks.into_inner(),
+            partial_match_blocks: partial_match_blocks.into_inner(),
+            total_points_queried: total_points_queried.into_inner(),
+            matching_points: matching_points.into_inner(),
             runtime: timer.elapsed(),
         })
     }

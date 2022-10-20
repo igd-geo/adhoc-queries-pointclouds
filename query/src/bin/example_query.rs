@@ -1,4 +1,7 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    sync::{Arc, Mutex},
+};
 
 use anyhow::Result;
 use pasture_core::nalgebra::Vector3;
@@ -55,8 +58,8 @@ fn main() -> Result<()> {
     let mut progressive_index = ProgressiveIndex::new();
     let dataset_id = progressive_index.add_dataset(paths)?;
 
-    let mut result_collector = CountCollector::new();
-    let stats = progressive_index.query(dataset_id, query_doc_aabb_l, &mut result_collector)?;
+    let result_collector = Arc::new(Mutex::new(CountCollector::new()));
+    let stats = progressive_index.query(dataset_id, query_doc_aabb_l, result_collector.clone())?;
 
     println!("{}", stats);
 

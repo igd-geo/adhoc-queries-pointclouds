@@ -1,14 +1,12 @@
 use crate::{
-    collect_points::ResultCollector,
+    collect_points::PointBufferSend,
     index::{Classification, Position},
 };
 use anyhow::Result;
 use byteorder::{LittleEndian, NativeEndian, ReadBytesExt, WriteBytesExt};
 use memmap::Mmap;
 use pasture_core::{
-    containers::{
-        InterleavedPointBufferMut, InterleavedVecPointStorage, PointBuffer, PointBufferWriteable,
-    },
+    containers::{InterleavedPointBufferMut, InterleavedVecPointStorage, PointBufferWriteable},
     nalgebra::{clamp, Vector3},
 };
 use pasture_io::{
@@ -42,12 +40,12 @@ pub struct LASExtractor;
 impl Extractor for LASExtractor {
     fn extract_data(
         &self,
-        file: &mut Cursor<Mmap>,
+        file: &mut Cursor<&[u8]>,
         file_header: &raw::Header,
         block: Range<usize>,
         matching_indices: &mut [bool],
         num_matches: usize,
-    ) -> Result<Box<dyn PointBuffer>> {
+    ) -> Result<Box<dyn PointBufferSend>> {
         let point_format =
             Format::new(file_header.point_data_record_format).expect("Invalid point format");
         let mut buffer = InterleavedVecPointStorage::with_capacity(
@@ -244,7 +242,7 @@ fn eval_impl<F: FnMut(usize) -> Result<bool>>(
 impl CompiledQueryAtom for LasQueryAtomWithin<Position> {
     fn eval(
         &self,
-        file: &mut Cursor<Mmap>,
+        file: &mut Cursor<&[u8]>,
         file_header: &pasture_io::las_rs::raw::Header,
         block: Range<usize>,
         matching_indices: &'_ mut [bool],
@@ -290,7 +288,7 @@ impl CompiledQueryAtom for LasQueryAtomWithin<Position> {
 impl CompiledQueryAtom for LasQueryAtomWithin<Classification> {
     fn eval(
         &self,
-        file: &mut Cursor<Mmap>,
+        file: &mut Cursor<&[u8]>,
         file_header: &pasture_io::las_rs::raw::Header,
         block: Range<usize>,
         matching_indices: &'_ mut [bool],
@@ -325,7 +323,7 @@ impl CompiledQueryAtom for LasQueryAtomWithin<Classification> {
 impl CompiledQueryAtom for LasQueryAtomEquals<Position> {
     fn eval(
         &self,
-        file: &mut Cursor<Mmap>,
+        file: &mut Cursor<&[u8]>,
         file_header: &pasture_io::las_rs::raw::Header,
         block: Range<usize>,
         matching_indices: &'_ mut [bool],
@@ -369,7 +367,7 @@ impl CompiledQueryAtom for LasQueryAtomEquals<Position> {
 impl CompiledQueryAtom for LasQueryAtomEquals<Classification> {
     fn eval(
         &self,
-        file: &mut Cursor<Mmap>,
+        file: &mut Cursor<&[u8]>,
         file_header: &pasture_io::las_rs::raw::Header,
         block: Range<usize>,
         matching_indices: &'_ mut [bool],

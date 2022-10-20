@@ -1,21 +1,25 @@
 use anyhow::Result;
-use pasture_core::{math::AABB, containers::PointBuffer};
+use pasture_core::{containers::PointBuffer, math::AABB};
 
 use crate::grid_sampling::SparseGrid;
-use readers::Point;
 
-pub trait ResultCollector {
-    fn collect(&mut self, points: Box<dyn PointBuffer>);
+pub trait PointBufferSend: PointBuffer + Send {}
+impl<T: PointBuffer + Send> PointBufferSend for T {}
+
+pub trait ResultCollector: Send {
+    fn collect(&mut self, points: Box<dyn PointBufferSend>);
     fn point_count(&self) -> usize;
 }
 
 pub struct BufferCollector {
-    buffers: Vec<Box<dyn PointBuffer>>,
+    buffers: Vec<Box<dyn PointBufferSend>>,
 }
 
 impl BufferCollector {
     pub fn new() -> Self {
-        Self { buffers: Vec::new() }
+        Self {
+            buffers: Vec::new(),
+        }
     }
 }
 
@@ -24,7 +28,7 @@ impl ResultCollector for BufferCollector {
         self.buffers.iter().map(|buf| buf.len()).sum()
     }
 
-    fn collect(&mut self, points: Box<dyn PointBuffer>) {
+    fn collect(&mut self, points: Box<dyn PointBufferSend>) {
         self.buffers.push(points);
     }
 }
@@ -42,7 +46,7 @@ impl ResultCollector for StdOutCollector {
         0
     }
 
-    fn collect(&mut self, points: Box<dyn PointBuffer>) {
+    fn collect(&mut self, points: Box<dyn PointBufferSend>) {
         unimplemented!()
     }
 }
@@ -62,7 +66,7 @@ impl ResultCollector for CountCollector {
         self.point_count
     }
 
-    fn collect(&mut self, points: Box<dyn PointBuffer>) {
+    fn collect(&mut self, points: Box<dyn PointBufferSend>) {
         self.point_count += points.len();
     }
 }
@@ -83,7 +87,7 @@ impl ResultCollector for GridSampledCollector {
         self.grid.points().count()
     }
 
-    fn collect(&mut self, points: Box<dyn PointBuffer>) {
+    fn collect(&mut self, points: Box<dyn PointBufferSend>) {
         unimplemented!()
     }
 }
