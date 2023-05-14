@@ -16,15 +16,17 @@
 //      3.5) Implement some refinement procedure that generates or improves the index for each block (this is TBD)
 
 use anyhow::{anyhow, bail, Context, Result};
+use itertools::Itertools;
 use log::info;
 use memmap::Mmap;
 use pasture_io::{base::IOFactory, las_rs::raw};
 use rayon::prelude::*;
+use rustc_hash::FxHashMap;
 use std::{
     collections::HashMap,
     ffi::OsStr,
     fs::File,
-    io::Cursor,
+    io::{BufWriter, Cursor},
     path::{Path, PathBuf},
     sync::{
         atomic::{AtomicUsize, Ordering},
@@ -33,17 +35,57 @@ use std::{
     time::Instant,
 };
 
-use super::{Block, BlockIndex, PositionIndex, Query, ValueType};
+use super::{Block, BlockIndex, IndexResult, PointRange, PositionIndex, Query, ValueType};
 use crate::{
     collect_points::ResultCollector,
+    index::IndexRefinement,
     search::{compile_query, Extractor, LASExtractor, WhichIndicesToLoopOver},
-    stats::QueryStats,
+    stats::{BlockQueryRuntimeTracker, QueryStats},
 };
 
 struct KnownDataset {
     files: Vec<PathBuf>,
-    index: BlockIndex,
+    indices: FxHashMap<ValueType, BlockIndex>,
     common_file_extension: String,
+}
+
+impl KnownDataset {
+    pub(crate) fn get_matching_blocks(
+        &self,
+        query: &Query,
+    ) -> FxHashMap<usize, Vec<(PointRange, IndexResult)>> {
+        // Which indices does the query need?
+        // If only one index, loop over the blocks of that index and filter them using the query
+        // If multiple indices, get an iterator over all blocks per index and start with the first block in each index. Advance the iterator
+        // for the smallest block(s) and always evaluate using all indices for the current blocks
+
+        let mut result: FxHashMap<usize, Vec<(PointRange, IndexResult)>> = Default::default();
+
+        for (point_range, query_result) in query.eval(&self.indices) {
+            match query_result {
+                IndexResult::MatchAll | IndexResult::MatchSome => {
+                    if let Some(blocks_of_file) = result.get_mut(&point_range.file_index) {
+                        blocks_of_file.push((point_range, query_result));
+                    } else {
+                        result.insert(point_range.file_index, vec![(point_range, query_result)]);
+                    }
+                }
+                _ => (),
+            }
+        }
+
+        result
+    }
+
+    /// Apply the given range of IndexRefinements to the indices of this dataset
+    fn apply_refinements<I: Iterator<Item = IndexRefinement>>(&mut self, refinements: I) {
+        // Group refinements by their index ValueType, then apply each set of refinements to each of the indices
+        for (value_type, refinements) in &refinements.group_by(|refinement| refinement.value_type) {
+            if let Some(index) = self.indices.get_mut(&value_type) {
+                index.apply_refinements(&refinements.collect::<Vec<_>>());
+            }
+        }
+    }
 }
 
 pub type DatasetID = usize;
@@ -62,13 +104,13 @@ impl ProgressiveIndex {
     pub fn add_dataset(&mut self, files: Vec<PathBuf>) -> Result<DatasetID> {
         info!("Adding new dataset");
         let id = self.datasets.len();
-        let (index, common_file_extension) = build_initial_block_index(&files)
+        let (indices, common_file_extension) = build_initial_block_indices(&files)
             .context("Failed do build initial index for dataset")?;
         self.datasets.insert(
             id,
             KnownDataset {
                 files,
-                index,
+                indices,
                 common_file_extension,
             },
         );
@@ -83,8 +125,9 @@ impl ProgressiveIndex {
     ) -> Result<QueryStats> {
         info!("Querying dataset {}", dataset_id);
         let timer = Instant::now();
+        let runtime_tracker = BlockQueryRuntimeTracker::default();
 
-        let dataset = self.datasets.get(&dataset_id).expect("Unknown dataset");
+        let dataset = self.datasets.get_mut(&dataset_id).expect("Unknown dataset");
         let compiled_query =
             compile_query(&query, &dataset.common_file_extension).context(format!(
                 "Can't compile query for file format {}",
@@ -99,24 +142,14 @@ impl ProgressiveIndex {
         };
 
         // Query with index to get matching blocks, group the blocks by their file
-        let blocks = dataset.index.get_matching_blocks(&query);
-        let mut blocks_per_file: HashMap<usize, Vec<_>> = HashMap::new();
-        for (block, query_result) in blocks {
-            if let Some(blocks_of_file) = blocks_per_file.get_mut(&block.file_id()) {
-                blocks_of_file.push((block.len(), block.point_range(), query_result));
-            } else {
-                blocks_per_file.insert(
-                    block.file_id(),
-                    vec![(block.len(), block.point_range(), query_result)],
-                );
-            }
-        }
+        let blocks_per_file = dataset.get_matching_blocks(&query);
 
         let largest_block = dataset
-            .index
-            .largest_block()
-            .expect("There are no blocks in the index")
-            .len();
+            .indices
+            .iter()
+            .map(|(_, index)| index.largest_block().expect("No blocks").len())
+            .max()
+            .expect("No indices");
         let all_matching_indices = vec![true; largest_block];
 
         let partial_match_blocks = AtomicUsize::new(0);
@@ -124,11 +157,12 @@ impl ProgressiveIndex {
         let total_points_queried = AtomicUsize::new(0);
         let matching_points = AtomicUsize::new(0);
 
-        blocks_per_file
+        let refined_indices = blocks_per_file
             .into_par_iter()
-            .map(|(file_id, blocks)| -> Result<()> {
+            .map(|(file_id, blocks)| -> Result<Vec<IndexRefinement>> {
                 let path = dataset.files[file_id].as_path();
 
+                // TODO This is LAS-specific, extract this
                 let file = File::open(path).context("Can't open file")?;
                 let file_mmap = unsafe { Mmap::map(&file).context("Can't mmap file")? };
                 let file_data: &[u8] = &file_mmap;
@@ -136,14 +170,19 @@ impl ProgressiveIndex {
                 let raw_header = raw::Header::read_from(&mut Cursor::new(file_data))
                     .context("Can't read LAS header")?;
 
-                blocks
+                let refined_indices = blocks
                     .into_par_iter()
                     .map_with(
                         all_matching_indices.clone(),
                         |all_matching_indices,
-                         (block_length, block_point_range, index_result)|
-                         -> Result<()> {
+                         (point_range, index_result)|
+                         -> Result<Vec<IndexRefinement>> {
+                            let block_length = point_range.points_in_file.len();
                             let mut cursor = Cursor::new(file_data);
+
+                            // Simpler way to refine would be to refine as a separate step AFTER evaluating the query
+                            let mut refined_indices = Some(vec![]);
+
                             // IndexResult will be either partial match or full match
                             match index_result {
                                 super::IndexResult::MatchAll => {
@@ -151,9 +190,10 @@ impl ProgressiveIndex {
                                         .extract_data(
                                             &mut cursor,
                                             &raw_header,
-                                            block_point_range,
+                                            point_range,
                                             all_matching_indices,
                                             block_length,
+                                            &runtime_tracker,
                                         )
                                         .context("Failed to extract data for block")?;
 
@@ -169,18 +209,21 @@ impl ProgressiveIndex {
                                     let num_matches = compiled_query.eval(
                                         &mut cursor,
                                         &raw_header,
-                                        block_point_range.clone(),
+                                        point_range.clone(),
                                         all_matching_indices,
                                         block_length,
                                         WhichIndicesToLoopOver::All,
+                                        &mut refined_indices,
+                                        &runtime_tracker,
                                     )?;
                                     let data = data_extractor
                                         .extract_data(
                                             &mut cursor,
                                             &raw_header,
-                                            block_point_range.clone(),
+                                            point_range.clone(),
                                             &mut all_matching_indices[..block_length],
                                             num_matches,
+                                            &runtime_tracker,
                                         )
                                         .context("Failed to extract data for block")?;
 
@@ -194,14 +237,16 @@ impl ProgressiveIndex {
                         "get_matching_blocks should not return a block with IndexResult::NoMatch"
                     ),
                             }
-                            Ok(())
+                            Ok(refined_indices.unwrap())
                         },
                     )
-                    .collect::<Result<_>>()?;
+                    .collect::<Result<Vec<_>, _>>()?;
 
-                Ok(())
+                Ok(refined_indices.into_iter().flatten().collect())
             })
-            .collect::<Result<_>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
+
+        dataset.apply_refinements(refined_indices.into_iter().flatten());
 
         // info!(
         //     "Blocks queried: {} full, {} partial ({} total in dataset)",
@@ -210,8 +255,10 @@ impl ProgressiveIndex {
         //     dataset.index.blocks_count()
         // );
 
+        runtime_tracker.to_csv(BufWriter::new(File::create("query.csv")?))?;
+
         Ok(QueryStats {
-            total_blocks_queried: dataset.index.blocks_count(),
+            total_blocks_queried: 0, //TODO
             full_match_blocks: full_match_blocks.into_inner(),
             partial_match_blocks: partial_match_blocks.into_inner(),
             total_points_queried: total_points_queried.into_inner(),
@@ -223,11 +270,14 @@ impl ProgressiveIndex {
 
 // const INITIAL_BLOCK_SIZE: usize = 50_000; // Same size as the default LAZ block size
 
-fn build_initial_block_index<P: AsRef<Path>>(files: &'_ [P]) -> Result<(BlockIndex, String)> {
+fn build_initial_block_indices<P: AsRef<Path>>(
+    files: &'_ [P],
+) -> Result<(FxHashMap<ValueType, BlockIndex>, String)> {
     let common_extension =
         common_file_extension(files).context("Can't get common file extension")?;
     let io_factory = IOFactory::default();
-    let mut blocks = vec![];
+    let mut position_blocks = vec![];
+    let mut classification_blocks = vec![];
     for (file_id, file) in files.iter().enumerate() {
         let reader = io_factory.make_reader(file.as_ref()).context(format!(
             "Can't open file reader for file {}",
@@ -251,16 +301,21 @@ fn build_initial_block_index<P: AsRef<Path>>(files: &'_ [P]) -> Result<(BlockInd
         // Create one block per file and add a position index to it (we can do that because we have the bounds in the LAS header)
         let mut block = Block::new(0..point_count, file_id);
         let position_index = PositionIndex::new(bounds);
-        block
-            .indices_mut()
-            .insert(ValueType::Position3D, Box::new(position_index));
-        blocks.push(block);
+        block.set_index(Box::new(position_index));
+        position_blocks.push(block);
+        // Can't create an initial index for classifications because there is no histogram within the header. So we use a block without
+        // an index
+        classification_blocks.push(Block::new(0..point_count, file_id));
     }
 
-    Ok((
-        BlockIndex::new(blocks),
-        common_extension.to_string_lossy().to_lowercase(),
-    ))
+    let mut indices: FxHashMap<_, _> = Default::default();
+    indices.insert(ValueType::Position3D, BlockIndex::new(position_blocks));
+    indices.insert(
+        ValueType::Classification,
+        BlockIndex::new(classification_blocks),
+    );
+
+    Ok((indices, common_extension.to_string_lossy().to_lowercase()))
 }
 
 fn common_file_extension<P: AsRef<Path>>(files: &[P]) -> Result<&OsStr> {

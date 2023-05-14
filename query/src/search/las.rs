@@ -1,21 +1,28 @@
 use crate::{
     collect_points::PointBufferSend,
-    index::{Classification, Position},
+    index::{
+        Block, Classification, Index, IndexRefinement, PointRange, Position, PositionIndex,
+        ValueType,
+    },
+    stats::{BlockQueryRuntimeTracker, BlockQueryRuntimeType},
 };
 use anyhow::Result;
 use byteorder::{LittleEndian, NativeEndian, ReadBytesExt, WriteBytesExt};
-use memmap::Mmap;
+use divide_range::RangeDivisions;
+use log::info;
 use pasture_core::{
     containers::{InterleavedPointBufferMut, InterleavedVecPointStorage, PointBufferWriteable},
-    nalgebra::{clamp, Vector3},
+    math::AABB,
+    nalgebra::{clamp, Point3, Vector3},
 };
 use pasture_io::{
     las::point_layout_from_las_point_format,
     las_rs::{point::Format, raw},
 };
-use std::io::SeekFrom;
+use scopeguard::defer;
 use std::io::{Cursor, Seek};
 use std::ops::Range;
+use std::{io::SeekFrom, time::Instant};
 
 use super::{CompiledQueryAtom, Extractor};
 
@@ -35,6 +42,46 @@ pub(crate) fn to_local_integer_position(
     )
 }
 
+/// Calculates the world-space bounding box for the given range of points in the given file
+fn get_bounds_of_point_range(
+    file: &mut Cursor<&[u8]>,
+    file_header: &raw::Header,
+    point_range: Range<usize>,
+) -> Result<AABB<f64>> {
+    let mut local_min = Vector3::<i32>::new(i32::MAX, i32::MAX, i32::MAX);
+    let mut local_max = Vector3::<i32>::new(i32::MIN, i32::MIN, i32::MIN);
+    for point_index in point_range {
+        let point_offset: u64 = point_index as u64 * file_header.point_data_record_length as u64
+            + file_header.offset_to_point_data as u64;
+        file.seek(SeekFrom::Start(point_offset))?;
+
+        let x = file.read_i32::<LittleEndian>()?;
+        let y = file.read_i32::<LittleEndian>()?;
+        let z = file.read_i32::<LittleEndian>()?;
+
+        local_min.x = local_min.x.min(x);
+        local_min.y = local_min.y.min(y);
+        local_min.z = local_min.z.min(z);
+
+        local_max.x = local_max.x.max(x);
+        local_max.y = local_max.y.max(y);
+        local_max.z = local_max.z.max(z);
+    }
+
+    Ok(AABB::from_min_max(
+        Point3::new(
+            (local_min.x as f64 * file_header.x_scale_factor) + file_header.x_offset,
+            (local_min.y as f64 * file_header.y_scale_factor) + file_header.y_offset,
+            (local_min.z as f64 * file_header.z_scale_factor) + file_header.z_offset,
+        ),
+        Point3::new(
+            (local_max.x as f64 * file_header.x_scale_factor) + file_header.x_offset,
+            (local_max.y as f64 * file_header.y_scale_factor) + file_header.y_offset,
+            (local_max.z as f64 * file_header.z_scale_factor) + file_header.z_offset,
+        ),
+    ))
+}
+
 pub struct LASExtractor;
 
 impl Extractor for LASExtractor {
@@ -42,10 +89,28 @@ impl Extractor for LASExtractor {
         &self,
         file: &mut Cursor<&[u8]>,
         file_header: &raw::Header,
-        block: Range<usize>,
+        block: PointRange,
         matching_indices: &mut [bool],
         num_matches: usize,
+        runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<Box<dyn PointBufferSend>> {
+        let t_start = Instant::now();
+        defer! {
+            runtime_tracker.log_runtime(block.clone(), BlockQueryRuntimeType::Extraction, t_start.elapsed());
+        }
+
+        {
+            let mut num_disjoint_ranges: usize = 0;
+            for (current_included, next_included) in
+                matching_indices.iter().zip(matching_indices.iter().skip(1))
+            {
+                if current_included != next_included {
+                    num_disjoint_ranges += 1;
+                }
+            }
+            info!("Num disjoint ranges @ {block}: {num_disjoint_ranges}");
+        }
+
         let point_format =
             Format::new(file_header.point_data_record_format).expect("Invalid point format");
         let mut buffer = InterleavedVecPointStorage::with_capacity(
@@ -54,25 +119,22 @@ impl Extractor for LASExtractor {
         );
         buffer.resize(num_matches);
 
-        let num_matches_counted: usize = matching_indices.iter().filter(|b| **b).count();
-        assert_eq!(num_matches, num_matches_counted);
+        // let num_matches_counted: usize = matching_indices.iter().filter(|b| **b).count();
+        // assert_eq!(num_matches, num_matches_counted);
 
-        let mut current_point = 0;
+        let point_raw_data = buffer.get_raw_points_mut(0..num_matches);
+        let mut point_data_writer = Cursor::new(point_raw_data);
+
         for (relative_index, _) in matching_indices
             .iter()
             .enumerate()
             .filter(|(_, is_match)| **is_match)
         {
-            let point_index = relative_index + block.start;
+            let point_index = relative_index + block.points_in_file.start;
             let point_offset: u64 = point_index as u64
                 * file_header.point_data_record_length as u64
                 + file_header.offset_to_point_data as u64;
             file.seek(SeekFrom::Start(point_offset))?;
-
-            let point_raw_data = buffer.get_raw_point_mut(current_point);
-            current_point += 1;
-
-            let mut point_data_writer = Cursor::new(point_raw_data);
 
             // XYZ
             let local_x = file.read_i32::<LittleEndian>()?;
@@ -191,17 +253,20 @@ impl<T> LasQueryAtomEquals<T> {
 }
 
 fn eval_impl<F: FnMut(usize) -> Result<bool>>(
-    block: Range<usize>,
+    block: PointRange,
     matching_indices: &'_ mut [bool],
     which_indices_to_loop_over: super::WhichIndicesToLoopOver,
     mut test_point: F,
+    runtime_tracker: &BlockQueryRuntimeTracker,
 ) -> Result<usize> {
+    let timer = Instant::now();
+
     let mut num_matches = 0;
     match which_indices_to_loop_over {
         super::WhichIndicesToLoopOver::All => {
-            assert!(block.len() <= matching_indices.len());
-            for point_index in block.clone() {
-                let local_index = point_index - block.start;
+            assert!(block.points_in_file.len() <= matching_indices.len());
+            for point_index in block.points_in_file.clone() {
+                let local_index = point_index - block.points_in_file.start;
                 matching_indices[local_index] = test_point(point_index)?;
                 if matching_indices[local_index] {
                     num_matches += 1;
@@ -214,7 +279,7 @@ fn eval_impl<F: FnMut(usize) -> Result<bool>>(
                 .enumerate()
                 .filter(|(_, is_match)| **is_match)
             {
-                let point_index = local_index + block.start;
+                let point_index = local_index + block.points_in_file.start;
                 *is_match = test_point(point_index)?;
                 if *is_match {
                     num_matches += 1;
@@ -227,7 +292,7 @@ fn eval_impl<F: FnMut(usize) -> Result<bool>>(
                 .enumerate()
                 .filter(|(_, is_match)| !**is_match)
             {
-                let point_index = local_index + block.start;
+                let point_index = local_index + block.points_in_file.start;
                 *is_match = test_point(point_index)?;
                 if *is_match {
                     num_matches += 1;
@@ -235,6 +300,8 @@ fn eval_impl<F: FnMut(usize) -> Result<bool>>(
             }
         }
     }
+
+    runtime_tracker.log_runtime(block, BlockQueryRuntimeType::Eval, timer.elapsed());
 
     Ok(num_matches)
 }
@@ -244,12 +311,54 @@ impl CompiledQueryAtom for LasQueryAtomWithin<Position> {
         &self,
         file: &mut Cursor<&[u8]>,
         file_header: &pasture_io::las_rs::raw::Header,
-        block: Range<usize>,
+        block: PointRange,
         matching_indices: &'_ mut [bool],
         which_indices_to_loop_over: super::WhichIndicesToLoopOver,
+        index_refinements: &mut Option<Vec<IndexRefinement>>,
+        runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<usize> {
         let local_min = to_local_integer_position(&self.min.0, file_header);
         let local_max = to_local_integer_position(&self.max.0, file_header);
+
+        // TODO Try something out: Naively split the block into 4 smaller blocks
+        // TODO We can play with the number of splits in general, but we could also e.g. only split off the first N%
+        // of points. Might be a way to control the amount of time spent in refinement
+        if let Some(index_refinements) = index_refinements {
+            if block.points_in_file.clone().len() > 4 * Block::MIN_BLOCK_SIZE {
+                let timer = Instant::now();
+                let refined_indices = block
+                    .points_in_file
+                    .clone()
+                    .divide_evenly_into(4)
+                    .map(
+                        |new_block| -> Result<(PointRange, Box<dyn Index + 'static>)> {
+                            let bounds =
+                                get_bounds_of_point_range(file, file_header, new_block.clone())?;
+                            let new_index = PositionIndex::new(bounds);
+                            Ok((
+                                PointRange {
+                                    file_index: block.file_index,
+                                    points_in_file: new_block,
+                                },
+                                Box::new(new_index),
+                            ))
+                        },
+                    )
+                    .collect::<Result<Vec<_>, _>>()?;
+
+                index_refinements.push(IndexRefinement {
+                    point_range_before_refinement: block.clone(),
+                    value_type: ValueType::Position3D,
+                    refined_indices,
+                });
+
+                runtime_tracker.log_runtime(
+                    block.clone(),
+                    BlockQueryRuntimeType::Refinement,
+                    timer.elapsed(),
+                );
+            }
+        }
 
         let test_point = |point_index: usize| -> Result<bool> {
             // Seek to point start, read X, Y, and Z in LAS i32 format and check
@@ -281,6 +390,7 @@ impl CompiledQueryAtom for LasQueryAtomWithin<Position> {
             matching_indices,
             which_indices_to_loop_over,
             test_point,
+            runtime_tracker,
         )
     }
 }
@@ -290,9 +400,11 @@ impl CompiledQueryAtom for LasQueryAtomWithin<Classification> {
         &self,
         file: &mut Cursor<&[u8]>,
         file_header: &pasture_io::las_rs::raw::Header,
-        block: Range<usize>,
+        block: PointRange,
         matching_indices: &'_ mut [bool],
         which_indices_to_loop_over: super::WhichIndicesToLoopOver,
+        _index_refinements: &mut Option<Vec<IndexRefinement>>,
+        runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<usize> {
         let offset_to_classification = if file_header.point_data_record_format > 5 {
             16
@@ -316,6 +428,7 @@ impl CompiledQueryAtom for LasQueryAtomWithin<Classification> {
             matching_indices,
             which_indices_to_loop_over,
             test_point,
+            runtime_tracker,
         )
     }
 }
@@ -325,9 +438,11 @@ impl CompiledQueryAtom for LasQueryAtomEquals<Position> {
         &self,
         file: &mut Cursor<&[u8]>,
         file_header: &pasture_io::las_rs::raw::Header,
-        block: Range<usize>,
+        block: PointRange,
         matching_indices: &'_ mut [bool],
         which_indices_to_loop_over: super::WhichIndicesToLoopOver,
+        _index_refinements: &mut Option<Vec<IndexRefinement>>,
+        runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<usize> {
         let local_position = to_local_integer_position(&self.value.0, file_header);
         let test_point = |point_index: usize| -> Result<bool> {
@@ -360,6 +475,7 @@ impl CompiledQueryAtom for LasQueryAtomEquals<Position> {
             matching_indices,
             which_indices_to_loop_over,
             test_point,
+            runtime_tracker,
         )
     }
 }
@@ -369,9 +485,11 @@ impl CompiledQueryAtom for LasQueryAtomEquals<Classification> {
         &self,
         file: &mut Cursor<&[u8]>,
         file_header: &pasture_io::las_rs::raw::Header,
-        block: Range<usize>,
+        block: PointRange,
         matching_indices: &'_ mut [bool],
         which_indices_to_loop_over: super::WhichIndicesToLoopOver,
+        _index_refinements: &mut Option<Vec<IndexRefinement>>,
+        runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<usize> {
         let offset_to_classification = if file_header.point_data_record_format > 5 {
             16
@@ -395,6 +513,7 @@ impl CompiledQueryAtom for LasQueryAtomEquals<Classification> {
             matching_indices,
             which_indices_to_loop_over,
             test_point,
+            runtime_tracker,
         )
     }
 }

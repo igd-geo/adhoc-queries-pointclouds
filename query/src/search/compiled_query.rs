@@ -1,11 +1,12 @@
-use std::{io::Cursor, ops::Range};
+use std::io::Cursor;
 
 use anyhow::{bail, Result};
 use pasture_io::las_rs::raw::Header;
 
 use crate::{
-    collect_points::{PointBufferSend, ResultCollector},
-    index::{QueryExpression, Value},
+    collect_points::PointBufferSend,
+    index::{IndexRefinement, PointRange, QueryExpression, Value},
+    stats::BlockQueryRuntimeTracker,
 };
 
 use super::{LasQueryAtomEquals, LasQueryAtomWithin};
@@ -17,9 +18,11 @@ pub trait CompiledQueryAtom: Sync + Send {
         &self,
         file: &mut Cursor<&[u8]>,
         file_header: &Header,
-        block: Range<usize>,
+        block: PointRange,
         matching_indices: &'_ mut [bool],
         which_indices_to_loop_over: WhichIndicesToLoopOver,
+        index_refinements: &mut Option<Vec<IndexRefinement>>,
+        runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<usize>;
 }
 
@@ -28,9 +31,10 @@ pub trait Extractor {
         &self,
         file: &mut Cursor<&[u8]>,
         file_header: &Header,
-        block: Range<usize>,
+        block: PointRange,
         matching_indices: &mut [bool],
         num_matches: usize,
+        runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<Box<dyn PointBufferSend>>;
 }
 
@@ -56,15 +60,23 @@ impl CompiledQueryExpression {
         &self,
         file: &mut Cursor<&[u8]>,
         file_header: &Header,
-        block: Range<usize>,
+        block: PointRange,
         matching_indices: &'a mut [bool],
         num_matches: usize,
         which_indices: WhichIndicesToLoopOver,
+        index_refinements: &mut Option<Vec<IndexRefinement>>,
+        runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<usize> {
         match self {
-            CompiledQueryExpression::Atom(atom) => {
-                atom.eval(file, file_header, block, matching_indices, which_indices)
-            }
+            CompiledQueryExpression::Atom(atom) => atom.eval(
+                file,
+                file_header,
+                block,
+                matching_indices,
+                which_indices,
+                index_refinements,
+                runtime_tracker,
+            ),
             CompiledQueryExpression::And(left, right) => {
                 let num_matches_left = left.eval(
                     file,
@@ -73,6 +85,8 @@ impl CompiledQueryExpression {
                     matching_indices,
                     num_matches,
                     which_indices,
+                    index_refinements,
+                    runtime_tracker,
                 )?;
                 // second expression doesn't have to consider indices which are already false
                 right.eval(
@@ -82,6 +96,8 @@ impl CompiledQueryExpression {
                     matching_indices,
                     num_matches_left,
                     WhichIndicesToLoopOver::Matching,
+                    index_refinements,
+                    runtime_tracker,
                 )
             }
             CompiledQueryExpression::Or(left, right) => {
@@ -92,6 +108,8 @@ impl CompiledQueryExpression {
                     matching_indices,
                     num_matches,
                     which_indices,
+                    index_refinements,
+                    runtime_tracker,
                 )?;
                 // second expression doesn't have to consider indices which are already true
                 right.eval(
@@ -101,6 +119,8 @@ impl CompiledQueryExpression {
                     matching_indices,
                     num_matches_left,
                     WhichIndicesToLoopOver::NotMatching,
+                    index_refinements,
+                    runtime_tracker,
                 )
             }
         }
@@ -108,30 +128,30 @@ impl CompiledQueryExpression {
 }
 
 /// Query the given block using the given compiled query. Data is extracted using the file-format-specific extractor and sent to result_collector
-pub fn query_block(
-    file: &mut Cursor<&[u8]>,
-    file_header: &Header,
-    block: Range<usize>,
-    matching_indices: &mut [bool],
-    compiled_query: &CompiledQueryExpression,
-    extractor: &dyn Extractor,
-    result_collector: &mut dyn ResultCollector,
-) -> Result<()> {
-    let num_matches = compiled_query.eval(
-        file,
-        file_header,
-        block.clone(),
-        matching_indices,
-        matching_indices.len(),
-        WhichIndicesToLoopOver::All,
-    )?;
-    if num_matches == 0 {
-        return Ok(());
-    }
-    let points = extractor.extract_data(file, file_header, block, matching_indices, num_matches)?;
-    result_collector.collect(points);
-    Ok(())
-}
+// pub fn query_block(
+//     file: &mut Cursor<&[u8]>,
+//     file_header: &Header,
+//     block: Range<usize>,
+//     matching_indices: &mut [bool],
+//     compiled_query: &CompiledQueryExpression,
+//     extractor: &dyn Extractor,
+//     result_collector: &mut dyn ResultCollector,
+// ) -> Result<()> {
+//     let num_matches = compiled_query.eval(
+//         file,
+//         file_header,
+//         block.clone(),
+//         matching_indices,
+//         matching_indices.len(),
+//         WhichIndicesToLoopOver::All,
+//     )?;
+//     if num_matches == 0 {
+//         return Ok(());
+//     }
+//     let points = extractor.extract_data(file, file_header, block, matching_indices, num_matches)?;
+//     result_collector.collect(points);
+//     Ok(())
+// }
 
 pub(crate) fn compile_query(
     query: &QueryExpression,

@@ -7,7 +7,7 @@ use anyhow::Result;
 use pasture_core::nalgebra::Vector3;
 use query::{
     collect_points::{BufferCollector, CountCollector, ResultCollector},
-    index::{Position, ProgressiveIndex, QueryExpression, Value},
+    index::{Classification, Position, ProgressiveIndex, QueryExpression, Value},
 };
 use walkdir::WalkDir;
 
@@ -44,6 +44,13 @@ fn main() -> Result<()> {
     let query_doc_aabb_xl = QueryExpression::Within(
         Value::Position(Position(Vector3::new(389400.0, 124200.0, -94.88)))
             ..Value::Position(Position(Vector3::new(406200.0, 148200.0, 760.03))),
+    );
+
+    let query_doc_all_buildings = QueryExpression::Equals(Value::Classification(Classification(6)));
+
+    let query_all_buildings_within_bounds = QueryExpression::And(
+        Box::new(query_doc_aabb_l.clone()),
+        Box::new(query_doc_all_buildings.clone()),
     );
 
     // let aabb_doc_l = AABB::from_min_max(

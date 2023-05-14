@@ -401,8 +401,8 @@ mod tests {
 
     use super::*;
 
-    #[test]
-    fn test_lazer_reader() -> Result<()> {
+    // #[test]
+    fn _test_last_reader() -> Result<()> {
         let mut las_source = LASReader::from_path("/Users/pbormann/data/geodata/pointclouds/datasets/navvis_m6_3rdFloor/navvis_m6_HQ3rdFloor.laz")?;
         let mut last_source = LASTReader::new("/Users/pbormann/data/projects/progressive_indexing/experiment_data/navvis_m6_HQ3rdFloor.last")?;
 

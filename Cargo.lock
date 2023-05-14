@@ -219,6 +219,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "divide_range"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3663190c2c12d9555be61a927734d69af13380fd7743303539864e551f36bb68"
+dependencies = [
+ "num-traits",
+]
+
+[[package]]
 name = "either"
 version = "1.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -402,6 +411,12 @@ dependencies = [
  "crypto-mac",
  "digest",
 ]
+
+[[package]]
+name = "human-repr"
+version = "1.1.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f58b778a5761513caf593693f8951c97a5b610841e754788400f32102eefdff1"
 
 [[package]]
 name = "humantime"
@@ -971,6 +986,8 @@ dependencies = [
  "bincode",
  "byteorder",
  "clap",
+ "divide_range",
+ "human-repr",
  "itertools",
  "log",
  "lz4",
@@ -985,6 +1002,7 @@ dependencies = [
  "rayon",
  "readers",
  "rustc-hash",
+ "scopeguard",
  "serde",
  "statrs",
  "tokio",
