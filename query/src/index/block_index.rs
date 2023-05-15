@@ -1,6 +1,5 @@
 use std::{fmt::Display, ops::Range};
 
-use log::info;
 use pasture_core::{containers::PointBuffer, math::AABB, nalgebra::Point3};
 use rustc_hash::FxHashMap;
 
@@ -230,13 +229,25 @@ impl BlockIndex {
     }
 
     /// Apply the given index refinements to this BlockIndex
-    pub fn apply_refinements(&mut self, refinements: &[IndexRefinement]) {
-        info!(
-            "Applying {} index refinements to BlockIndex",
-            refinements.len()
-        );
-        // implement this with Vec::splice in a loop over refinements (which have to be Vec<IndexRefinement> or something owned at least, so we can move the Box<dyn Index> out of it)
-        // todo!()
+    pub fn apply_refinements<I: Iterator<Item = IndexRefinement>>(&mut self, refinements: I) {
+        for refinement in refinements {
+            let old_point_range = refinement.point_range_before_refinement;
+            let new_blocks = refinement
+                .refined_indices
+                .into_iter()
+                .map(|(point_range, index)| Block {
+                    index: Some(index),
+                    point_range,
+                });
+
+            let pos_of_old_block = self
+                .blocks
+                .iter()
+                .position(|block| block.point_range == old_point_range)
+                .expect("Original block for refinement not found!");
+            self.blocks
+                .splice(pos_of_old_block..=pos_of_old_block, new_blocks);
+        }
     }
 }
 

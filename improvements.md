@@ -31,3 +31,17 @@
     - Index persistieren auf der Platte
     - Wiss. Frage: Wenn jetzt schon klar ist, dass data extraction den größten Teil der Zeit in Anspruch nimmt, in wieweit ergibt es dann noch Sinn, an Index/Query rumzubasteln? Sollte man nicht erstmal die Extraktion beschleunigen? 
     - Queries für LAZ ebenfalls implementieren, hier könnten die Ergebnisse anders aussehen und da könnte der Index deutlich wichtiger sein
+
+## 15.05.23
+
+- Vermutung: Ich muss erstmal eine MENGE Test-Szenarien aufbauen, sonst kriege ich die Komplexität von dem tool nicht in den Griff. Performance ist da zweitrangig, wirklich erstmal auflisten und implementieren, was ich alles gerne demonstrieren möchte
+    - AABB queries haben wir ja schon, die sind einigermaßen trivial
+    - LOD queries
+        - Wie sieht die zugehörige QueryExpression aus? LOD matcht vermutlich so gut wie alle Blocks, da hilft der Index wenig. Man bräuchte also eher einen 'Importance-Index' (z.B. mit reverse-morton sorted Dateien)
+    - Classification queries
+    - Kombinierte Queries
+    - Anwendungsfälle??
+        - Direkte Visualisierung wäre toll, eventuell mit Tobias' Renderer oder direkt Potree/Cesium?
+- Mal mit Michel und Tobias reden über deren progressive indexing ideen, vllt kann man hier noch was kombinieren? Geht aber letztlich ja nur drum für meine Diss noch paar Resultate zu kriegen
+- Mit Kevin nochmal diskutieren was man aufbauend auf seinem Cloud-based tool noch machen könnte
+    - Könnte dieses Tool hier auch was für die Cloud sein? 

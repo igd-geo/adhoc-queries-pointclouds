@@ -1,10 +1,19 @@
 use anyhow::Result;
-use pasture_core::{containers::PointBuffer, math::AABB};
+use pasture_core::{
+    containers::{InterleavedVecPointStorage, PointBuffer, PointBufferWriteable},
+    math::AABB,
+};
 
 use crate::grid_sampling::SparseGrid;
 
-pub trait PointBufferSend: PointBuffer + Send {}
-impl<T: PointBuffer + Send> PointBufferSend for T {}
+pub trait PointBufferSend: PointBuffer + Send {
+    fn as_point_buffer(&self) -> &dyn PointBuffer;
+}
+impl<T: PointBuffer + Send> PointBufferSend for T {
+    fn as_point_buffer(&self) -> &dyn PointBuffer {
+        self
+    }
+}
 
 pub trait ResultCollector: Send {
     fn collect(&mut self, points: Box<dyn PointBufferSend>);
@@ -20,6 +29,25 @@ impl BufferCollector {
         Self {
             buffers: Vec::new(),
         }
+    }
+
+    pub fn buffers(&self) -> &[Box<dyn PointBufferSend>] {
+        &self.buffers
+    }
+
+    pub fn as_single_buffer(&self) -> Option<InterleavedVecPointStorage> {
+        if self.buffers.is_empty() {
+            return None;
+        }
+
+        let layout = self.buffers[0].point_layout();
+        let mut ret = InterleavedVecPointStorage::new(layout.clone());
+
+        for buffer in &self.buffers {
+            ret.push(buffer.as_point_buffer());
+        }
+
+        Some(ret)
     }
 }
 

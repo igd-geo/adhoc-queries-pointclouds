@@ -3,6 +3,21 @@
 version = 3
 
 [[package]]
+name = "addr2line"
+version = "0.16.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e61f2b7f93d2c7d2b08263acaa4a363b3e276806c68af6134c44f523bf1aacd"
+dependencies = [
+ "gimli",
+]
+
+[[package]]
+name = "adler"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f26201604c87b1e01bd3d98f8d5d9a8fcbb815e8cedb41ffccbeb4bf593a35fe"
+
+[[package]]
 name = "aho-corasick"
 version = "0.7.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -25,6 +40,9 @@ name = "anyhow"
 version = "1.0.40"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28b2cd92db5cbd74e8e5028f7e27dd7aa3090e89e4f2a197cc7c8dfb69c7063b"
+dependencies = [
+ "backtrace",
+]
 
 [[package]]
 name = "approx"
@@ -62,6 +80,21 @@ name = "autocfg"
 version = "1.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cdb031dd78e28731d87d56cc8ffef4a8f36ca26c38fe2de700543e627f8a464a"
+
+[[package]]
+name = "backtrace"
+version = "0.3.61"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e7a905d892734eea339e896738c14b9afce22b5318f64b951e70bf3844419b01"
+dependencies = [
+ "addr2line",
+ "cc",
+ "cfg-if",
+ "libc",
+ "miniz_oxide",
+ "object",
+ "rustc-demangle",
+]
 
 [[package]]
 name = "base64"
@@ -394,6 +427,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "gimli"
+version = "0.25.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f0a01e0497841a3b2db4f8afa483cce65f7e96a3498bd6c541734792aeac8fe7"
+
+[[package]]
 name = "hermit-abi"
 version = "0.1.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -603,6 +642,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "miniz_oxide"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a92518e98c078586bc6c934028adcca4c92a53d6a958196de835170a01d84e4b"
+dependencies = [
+ "adler",
+ "autocfg",
+]
+
+[[package]]
 name = "mio"
 version = "0.7.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -654,7 +703,7 @@ dependencies = [
  "num-complex",
  "num-rational",
  "num-traits",
- "rand 0.8.3",
+ "rand 0.8.5",
  "rand_distr 0.4.0",
  "simba 0.4.0",
  "typenum",
@@ -755,6 +804,15 @@ checksum = "05499f3756671c15885fee9034446956fff3f243d6077b91e5767df161f766b3"
 dependencies = [
  "hermit-abi",
  "libc",
+]
+
+[[package]]
+name = "object"
+version = "0.26.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c55827317fb4c08822499848a14237d2874d6f139828893017237e7ab93eb386"
+dependencies = [
+ "memchr",
 ]
 
 [[package]]
@@ -922,7 +980,7 @@ dependencies = [
  "hmac",
  "md-5",
  "memchr",
- "rand 0.8.3",
+ "rand 0.8.5",
  "sha2",
  "stringprep",
 ]
@@ -999,6 +1057,7 @@ dependencies = [
  "postgis",
  "postgres-types",
  "pretty_env_logger",
+ "rand 0.8.5",
  "rayon",
  "readers",
  "rustc-hash",
@@ -1035,19 +1094,18 @@ dependencies = [
  "libc",
  "rand_chacha 0.2.2",
  "rand_core 0.5.1",
- "rand_hc 0.2.0",
+ "rand_hc",
 ]
 
 [[package]]
 name = "rand"
-version = "0.8.3"
+version = "0.8.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0ef9e7e66b4468674bfcb0c81af8b7fa0bb154fa9f28eb840da5c447baeb8d7e"
+checksum = "34af8d1a0e25924bc5b7c43c079c942339d8f0a8b57c39049bef581b46327404"
 dependencies = [
  "libc",
  "rand_chacha 0.3.0",
  "rand_core 0.6.2",
- "rand_hc 0.3.0",
 ]
 
 [[package]]
@@ -1105,7 +1163,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "da9e8f32ad24fb80d07d2323a9a2ce8b30d68a62b8cb4df88119ff49a698f038"
 dependencies = [
  "num-traits",
- "rand 0.8.3",
+ "rand 0.8.5",
 ]
 
 [[package]]
@@ -1115,15 +1173,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca3129af7b92a17112d59ad498c6f81eaf463253766b90396d39ea7a39d6613c"
 dependencies = [
  "rand_core 0.5.1",
-]
-
-[[package]]
-name = "rand_hc"
-version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3190ef7066a446f2e7f42e239d161e905420ccab01eb967c9eb27d21b2322a73"
-dependencies = [
- "rand_core 0.6.2",
 ]
 
 [[package]]
@@ -1199,6 +1248,12 @@ name = "regex-syntax"
 version = "0.6.27"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a3f87b73ce11b1619a3c6332f45341e0047173771e8b8b73f87bfeefb7b56244"
+
+[[package]]
+name = "rustc-demangle"
+version = "0.1.23"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d626bb9dae77e28219937af045c257c28bfd3f69333c512553507f5f9798cb76"
 
 [[package]]
 name = "rustc-hash"
@@ -1348,7 +1403,7 @@ dependencies = [
  "lazy_static",
  "nalgebra 0.26.2",
  "num-traits",
- "rand 0.8.3",
+ "rand 0.8.5",
 ]
 
 [[package]]

@@ -82,7 +82,7 @@ impl KnownDataset {
         // Group refinements by their index ValueType, then apply each set of refinements to each of the indices
         for (value_type, refinements) in &refinements.group_by(|refinement| refinement.value_type) {
             if let Some(index) = self.indices.get_mut(&value_type) {
-                index.apply_refinements(&refinements.collect::<Vec<_>>());
+                index.apply_refinements(refinements);
             }
         }
     }
@@ -183,6 +183,9 @@ impl ProgressiveIndex {
                             // Simpler way to refine would be to refine as a separate step AFTER evaluating the query
                             let mut refined_indices = Some(vec![]);
 
+                            let matching_indices_within_this_block =
+                                &mut all_matching_indices[..block_length];
+
                             // IndexResult will be either partial match or full match
                             match index_result {
                                 super::IndexResult::MatchAll => {
@@ -191,7 +194,7 @@ impl ProgressiveIndex {
                                             &mut cursor,
                                             &raw_header,
                                             point_range,
-                                            all_matching_indices,
+                                            matching_indices_within_this_block,
                                             block_length,
                                             &runtime_tracker,
                                         )
@@ -210,7 +213,7 @@ impl ProgressiveIndex {
                                         &mut cursor,
                                         &raw_header,
                                         point_range.clone(),
-                                        all_matching_indices,
+                                        matching_indices_within_this_block,
                                         block_length,
                                         WhichIndicesToLoopOver::All,
                                         &mut refined_indices,
@@ -221,7 +224,7 @@ impl ProgressiveIndex {
                                             &mut cursor,
                                             &raw_header,
                                             point_range.clone(),
-                                            &mut all_matching_indices[..block_length],
+                                            matching_indices_within_this_block,
                                             num_matches,
                                             &runtime_tracker,
                                         )

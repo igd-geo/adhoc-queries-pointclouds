@@ -11,33 +11,16 @@
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=query",
-                    "--package=query"
-                ],
-                "filter": {
-                    "name": "query",
-                    "kind": "bin"
-                }
+                    "--bin=example_query",
+                ]
             },
             "args": [
-                "-i",
-                //"/Users/pbormann/data/geodata/pointclouds/datasets/navvis_m6_3rdFloor/navvis_m6_HQ3rdFloor.laz",
-                "/Users/pbormann/data/projects/progressive_indexing/experiment_data/ca13/last",
-                "--bounds",
-                "665000;3910000;0;705000;3950000;480" ,
-                "--optimized",
-                "--parallel",
-                // "--class",
-                // "6"
-                //"--density",
-                //"0.1",
-                "-o",
-                "/Users/pbormann/tmp"
             ],
-            "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
-            "environment": [],
-            "externalConsole": false
+            "env": {
+                "RUST_LOG": "info",
+                "RUST_BACKTRACE": "1",
+            },
         },
         {
             "name": "Launch (Release)",
@@ -46,34 +29,17 @@
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=query",
-                    "--package=query",
+                    "--bin=example_query",
                     "--release"
-                ],
-                "filter": {
-                    "name": "query",
-                    "kind": "bin"
-                }
+                ]
             },
             "args": [
-                "-i",
-                //"/Users/pbormann/data/geodata/pointclouds/datasets/navvis_m6_3rdFloor/navvis_m6_HQ3rdFloor.laz",
-                "/Users/pbormann/data/projects/progressive_indexing/experiment_data/ca13/last",
-                "--bounds",
-                "665000;3910000;0;705000;3950000;480" ,
-                "--optimized",
-                "--parallel",
-                // "--class",
-                // "6"
-                //"--density",
-                //"0.1",
-                "-o",
-                "/Users/pbormann/tmp"
             ],
-            "stopAtEntry": false,
             "cwd": "${workspaceFolder}",
-            "environment": [],
-            "externalConsole": false
+            "env": {
+                "RUST_LOG": "info",
+                "RUST_BACKTRACE": "1",
+            },
         },
     ]
 }
