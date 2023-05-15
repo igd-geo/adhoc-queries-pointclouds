@@ -101,15 +101,18 @@ impl ProgressiveIndex {
         }
     }
 
-    pub fn add_dataset(&mut self, files: Vec<PathBuf>) -> Result<DatasetID> {
+    pub fn add_dataset<'a, P: AsRef<Path>>(&mut self, files: &'a [P]) -> Result<DatasetID> {
         info!("Adding new dataset");
         let id = self.datasets.len();
-        let (indices, common_file_extension) = build_initial_block_indices(&files)
+        let (indices, common_file_extension) = build_initial_block_indices(files)
             .context("Failed do build initial index for dataset")?;
         self.datasets.insert(
             id,
             KnownDataset {
-                files,
+                files: files
+                    .into_iter()
+                    .map(|file| file.as_ref().to_owned())
+                    .collect(),
                 indices,
                 common_file_extension,
             },

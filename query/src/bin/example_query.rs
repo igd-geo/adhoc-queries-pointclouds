@@ -63,7 +63,7 @@ fn main() -> Result<()> {
     // );
 
     let mut progressive_index = ProgressiveIndex::new();
-    let dataset_id = progressive_index.add_dataset(paths)?;
+    let dataset_id = progressive_index.add_dataset(paths.as_slice())?;
 
     let result_collector = Arc::new(Mutex::new(CountCollector::new()));
     let stats = progressive_index.query(dataset_id, query_doc_aabb_l, result_collector.clone())?;
