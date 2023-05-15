@@ -115,6 +115,8 @@ impl SparseGrid {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::HashSet;
+
     use super::*;
 
     #[test]
@@ -157,10 +159,9 @@ mod tests {
             ..Default::default()
         });
 
-        let cells = grid.cells().collect::<Vec<_>>();
-        assert_eq!(cells.len(), 2);
-        assert_eq!(*cells[0], 0);
-        assert_eq!(*cells[1], 1);
+        let cells = grid.cells().copied().collect::<HashSet<_>>();
+        let expected_cells: HashSet<u64> = [0, 1].iter().copied().collect::<HashSet<_>>();
+        assert_eq!(expected_cells, cells);
 
         let points = grid.points().collect::<Vec<_>>();
         assert_eq!(points.len(), 2);

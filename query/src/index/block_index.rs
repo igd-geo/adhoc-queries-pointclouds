@@ -213,32 +213,6 @@ impl BlockIndex {
         Self { blocks }
     }
 
-    // pub fn get_matching_blocks<'b>(
-    //     &'b self,
-    //     query: &'b Query,
-    // ) -> impl Iterator<Item = (&'b Block, IndexResult)> + 'b {
-    //     self.blocks.iter().filter_map(move |block| {
-    //         let query_result = query.eval(block);
-    //         match query_result {
-    //             IndexResult::NoMatch => None,
-    //             _ => Some((block, query_result)),
-    //         }
-    //     })
-    // }
-
-    // pub fn get_matching_blocks_mut<'b>(
-    //     &'b mut self,
-    //     query: &'b Query,
-    // ) -> impl Iterator<Item = (&'b mut Block, IndexResult)> + 'b {
-    //     self.blocks.iter_mut().filter_map(move |block| {
-    //         let query_result = query.eval(block);
-    //         match query_result {
-    //             IndexResult::NoMatch => None,
-    //             _ => Some((block, query_result)),
-    //         }
-    //     })
-    // }
-
     pub fn blocks(&self) -> &[Block] {
         &self.blocks
     }
@@ -261,6 +235,7 @@ impl BlockIndex {
             "Applying {} index refinements to BlockIndex",
             refinements.len()
         );
+        // implement this with Vec::splice in a loop over refinements (which have to be Vec<IndexRefinement> or something owned at least, so we can move the Box<dyn Index> out of it)
         // todo!()
     }
 }

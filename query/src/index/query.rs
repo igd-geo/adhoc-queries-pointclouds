@@ -120,11 +120,153 @@ fn and_query_results(
     both
 }
 
+fn combine_ranges(
+    a: (Range<usize>, IndexResult),
+    b: (Range<usize>, IndexResult),
+    file_index: usize,
+) -> Vec<(PointRange, IndexResult)> {
+    use std::cmp::{max, min};
+
+    // Check if the ranges intersect
+    if a.0.end >= b.0.start && a.0.start <= b.0.end {
+        let lower_start = min(a.0.start, b.0.start);
+        let lower_end = max(a.0.start, b.0.start);
+        let upper_start = min(a.0.end, b.0.end);
+        let upper_end = max(a.0.end, b.0.end);
+
+        let mut result = Vec::new();
+
+        if lower_start != lower_end {
+            let index_result = if a.0.start < b.0.start { a.1 } else { b.1 };
+
+            result.push((
+                PointRange::new(file_index, lower_start..lower_end),
+                index_result,
+            ));
+        }
+
+        result.push((
+            PointRange::new(file_index, lower_end..upper_start),
+            a.1.or(b.1),
+        ));
+
+        if upper_start != upper_end {
+            let index_result = if a.0.end < b.0.end { a.1 } else { b.1 };
+            result.push((
+                PointRange::new(file_index, upper_start..upper_end),
+                index_result,
+            ));
+        }
+
+        result
+    } else {
+        vec![
+            (PointRange::new(file_index, a.0), a.1),
+            (PointRange::new(file_index, b.0), b.1),
+        ]
+    }
+}
+
+fn combine_query_ranges(
+    a: &[(Range<usize>, IndexResult)],
+    b: &[(Range<usize>, IndexResult)],
+    file_index: usize,
+) -> Vec<(PointRange, IndexResult)> {
+    let mut i = 0;
+    let mut j = 0;
+    let mut result = Vec::new();
+
+    while i < a.len() && j < b.len() {
+        let combined = combine_ranges(a[i].clone(), b[j].clone(), file_index);
+        match combined.len() {
+            1 => {
+                result.push(combined[0].clone());
+                i += 1;
+                j += 1;
+            }
+            2 => {
+                if a[i].0.start < b[j].0.start {
+                    result.push(combined[0].clone());
+                    i += 1;
+                } else {
+                    result.push(combined[1].clone());
+                    j += 1;
+                }
+            }
+            3 => {
+                result.push(combined[0].clone());
+                result.push(combined[1].clone());
+                i += 1;
+                j += 1;
+            }
+            _ => {}
+        }
+    }
+
+    while i < a.len() {
+        result.push((PointRange::new(file_index, a[i].0.clone()), a[i].1));
+        i += 1;
+    }
+
+    while j < b.len() {
+        result.push((PointRange::new(file_index, b[i].0.clone()), b[i].1));
+        j += 1;
+    }
+
+    result
+}
+
 fn or_query_results(
     first: Vec<(PointRange, IndexResult)>,
     second: Vec<(PointRange, IndexResult)>,
 ) -> Vec<(PointRange, IndexResult)> {
-    todo!()
+    // We return all ranges in first AND second, but to be correct, we have to combine two ranges that overlap (within the same file) into a single range
+
+    // build a lookup table to make merging easier...
+    let mut lookup: FxHashMap<
+        usize,
+        (
+            Vec<(Range<usize>, IndexResult)>,
+            Vec<(Range<usize>, IndexResult)>,
+        ),
+    > = Default::default();
+
+    for (point_range, index_result) in first {
+        if !lookup.contains_key(&point_range.file_index) {
+            lookup.insert(point_range.file_index, (vec![], vec![]));
+        }
+
+        lookup
+            .get_mut(&point_range.file_index)
+            .unwrap()
+            .0
+            .push((point_range.points_in_file, index_result));
+    }
+
+    for (point_range, index_result) in second {
+        if !lookup.contains_key(&point_range.file_index) {
+            lookup.insert(point_range.file_index, (vec![], vec![]));
+        }
+
+        lookup
+            .get_mut(&point_range.file_index)
+            .unwrap()
+            .1
+            .push((point_range.points_in_file, index_result));
+    }
+
+    let mut combined_ranges = vec![];
+
+    for (file_index, (first_ranges, second_ranges)) in lookup {
+        let mut combined = combine_query_ranges(
+            first_ranges.as_slice(),
+            second_ranges.as_slice(),
+            file_index,
+        );
+        combined_ranges.append(&mut combined);
+    }
+
+    combined_ranges
 }
 
 #[derive(Clone, Debug)]
@@ -356,5 +498,28 @@ mod tests {
         let query2_results = query2.eval(&indices);
         let expected_query2_results = vec![(PointRange::new(1, 0..500), IndexResult::MatchSome)];
         assert_eq!(expected_query2_results, query2_results);
+
+        let query3 = QueryExpression::Or(
+            Box::new(QueryExpression::Within(
+                Value::Position(Position(Vector3::new(-2.0, -2.0, -2.0)))
+                    ..Value::Position(Position(Vector3::new(-1.0, -1.0, -1.0))),
+            )),
+            Box::new(QueryExpression::Equals(Value::Classification(
+                Classification(0),
+            ))),
+        );
+
+        let query3_results = query3.eval(&indices);
+        let expected_query3_results = vec![
+            // Returns the block of the SECOND index! It can't know that the first index has two blocks. Have to see
+            // what this means for evaluating the queries later on, this might potentially fail?
+            // I think it also might be a stupid idea to have separate blocks per index type, this makes the code super
+            // complicated... But it IS realistic, an index over positions will have very different structure than an
+            // index over classifications...
+            // After looking at it some more, I think I'm allowed to combine ranges/blocks (as long as they are within the same file) because query evaluation looks into the files anyway. This could make the code a bit easier
+            (PointRange::new(0, 0..1500), IndexResult::MatchSome),
+            (PointRange::new(1, 0..500), IndexResult::MatchSome),
+        ];
+        assert_eq!(expected_query3_results, query3_results);
     }
 }
