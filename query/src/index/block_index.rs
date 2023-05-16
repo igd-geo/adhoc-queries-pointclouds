@@ -116,6 +116,22 @@ pub struct PointRange {
     pub points_in_file: Range<usize>,
 }
 
+impl PartialOrd for PointRange {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(other))
+    }
+}
+
+impl Ord for PointRange {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match self.file_index.cmp(&other.file_index) {
+            core::cmp::Ordering::Equal => {}
+            ord => return ord,
+        }
+        self.points_in_file.start.cmp(&other.points_in_file.start)
+    }
+}
+
 impl PointRange {
     pub fn new(file_index: usize, points_in_file: Range<usize>) -> Self {
         Self {

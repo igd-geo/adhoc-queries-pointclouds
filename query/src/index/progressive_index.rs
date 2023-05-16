@@ -61,7 +61,7 @@ impl KnownDataset {
 
         let mut result: FxHashMap<usize, Vec<(PointRange, IndexResult)>> = Default::default();
 
-        for (point_range, query_result) in query.eval(&self.indices) {
+        for (point_range, query_result) in query.eval(&self.indices).matching_blocks {
             match query_result {
                 IndexResult::MatchAll | IndexResult::MatchSome => {
                     if let Some(blocks_of_file) = result.get_mut(&point_range.file_index) {
