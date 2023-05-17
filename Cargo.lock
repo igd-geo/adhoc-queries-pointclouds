@@ -1060,6 +1060,7 @@ dependencies = [
  "rand 0.8.5",
  "rayon",
  "readers",
+ "regex",
  "rustc-hash",
  "scopeguard",
  "serde",

@@ -12,3 +12,20 @@ pub fn intersect_ranges(range1: &Range<usize>, range2: &Range<usize>) -> Range<u
         min..min
     }
 }
+
+/// Returns true if the two ranges intersect. These examples intersect:
+/// ```
+/// range1: |---|        |----|       |----|  |-----|
+/// range2:   |---|   |----|     |----|         |-|
+/// ```
+///
+/// These examples don't intersect:
+/// ```
+/// range1: |---|
+/// range2:       |---|
+/// ```
+pub fn ranges_intersect(range1: &Range<usize>, range2: &Range<usize>) -> bool {
+    let start = range1.start.max(range2.start);
+    let end = range1.end.min(range2.end);
+    start <= end
+}

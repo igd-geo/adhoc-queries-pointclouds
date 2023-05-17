@@ -1,10 +1,13 @@
-use std::{collections::HashSet, ops::Range};
+use std::{
+    cmp::{max, min, Reverse},
+    collections::BinaryHeap,
+    ops::Range,
+};
 
-use itertools::Itertools;
 use pasture_core::nalgebra::Vector3;
 use rustc_hash::{FxHashMap, FxHashSet};
 
-use crate::util::intersect_ranges;
+use crate::util::{intersect_ranges, ranges_intersect};
 
 use super::{Block, BlockIndex, PointRange};
 
@@ -13,6 +16,38 @@ pub enum IndexResult {
     MatchAll,
     MatchSome,
     NoMatch,
+}
+
+impl Ord for IndexResult {
+    fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+        match self {
+            IndexResult::MatchAll => {
+                if *other == IndexResult::MatchAll {
+                    std::cmp::Ordering::Equal
+                } else {
+                    std::cmp::Ordering::Less
+                }
+            }
+            IndexResult::MatchSome => match other {
+                IndexResult::MatchAll => std::cmp::Ordering::Greater,
+                IndexResult::MatchSome => std::cmp::Ordering::Equal,
+                IndexResult::NoMatch => std::cmp::Ordering::Less,
+            },
+            IndexResult::NoMatch => {
+                if *other == IndexResult::MatchAll {
+                    std::cmp::Ordering::Equal
+                } else {
+                    std::cmp::Ordering::Greater
+                }
+            }
+        }
+    }
+}
+
+impl PartialOrd for IndexResult {
+    fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+        Some(self.cmp(&other))
+    }
 }
 
 impl IndexResult {
@@ -125,13 +160,6 @@ fn and_blocks_within_file<
             ));
         }
 
-        // This feels wrong. If we e.g. have this pattern:
-        // |------|------|
-        //     |------|
-        //
-        // Then the resulting blocks should be
-        //     |--|---|
-        // I hate this algorithm... Verify it...
         if first_block_unwrapped.0.points_in_file.end <= second_block_unwrapped.0.points_in_file.end
         {
             first_block = blocks_a.next();
@@ -145,6 +173,141 @@ fn and_blocks_within_file<
     combined
 }
 
+/// Combine two ranges of matching blocks into a single range of matching blocks using logical `OR`
+fn or_blocks_within_file<
+    I: Iterator<Item = (PointRange, IndexResult)>,
+    J: Iterator<Item = (PointRange, IndexResult)>,
+>(
+    blocks_a: I,
+    blocks_b: J,
+) -> Vec<(PointRange, IndexResult)> {
+    #[derive(Debug, PartialEq, Eq)]
+    struct MatchingBlock {
+        point_range: PointRange,
+        index_result: IndexResult,
+    }
+
+    impl PartialOrd for MatchingBlock {
+        fn partial_cmp(&self, other: &Self) -> Option<std::cmp::Ordering> {
+            Some(self.cmp(&other))
+        }
+    }
+
+    impl Ord for MatchingBlock {
+        fn cmp(&self, other: &Self) -> std::cmp::Ordering {
+            match self.point_range.cmp(&other.point_range) {
+                std::cmp::Ordering::Equal => self.index_result.cmp(&other.index_result),
+                ordering => ordering,
+            }
+        }
+    }
+
+    let mut combined = vec![];
+
+    let mut all_ranges = BinaryHeap::new();
+    all_ranges.extend(blocks_a.map(|i| Reverse(i)));
+    all_ranges.extend(blocks_b.map(|i| Reverse(i)));
+
+    // Push a new block into the resulting vector, or append it to the previous block, if they touch and have
+    // the same IndexResult
+    let mut push_or_append_new_block = |new_block: (PointRange, IndexResult)| {
+        if combined.is_empty() {
+            combined.push(new_block);
+        } else {
+            let mut prev_block = combined.last_mut().unwrap();
+            if prev_block.0.points_in_file.end == new_block.0.points_in_file.start
+                && prev_block.1 == new_block.1
+            {
+                prev_block.0.points_in_file.end = new_block.0.points_in_file.end;
+            } else {
+                combined.push(new_block);
+            }
+        }
+    };
+
+    while let Some(Reverse(mut current_range)) = all_ranges.pop() {
+        // Try to append the next range for as long as we can
+        while let Some(Reverse(next_range)) = all_ranges.peek() {
+            if !ranges_intersect(
+                &current_range.0.points_in_file,
+                &next_range.0.points_in_file,
+            ) {
+                break;
+            }
+
+            // If the next range has the same IndexResult as the current range, we can append
+            if next_range.1 == current_range.1 {
+                current_range.0.points_in_file.end = max(
+                    current_range.0.points_in_file.end,
+                    next_range.0.points_in_file.end,
+                );
+                // Consume the next range and try again
+                all_ranges.pop();
+            } else {
+                let intersection = intersect_ranges(
+                    &current_range.0.points_in_file,
+                    &next_range.0.points_in_file,
+                );
+                let min_start = min(
+                    current_range.0.points_in_file.start,
+                    next_range.0.points_in_file.start,
+                );
+                let max_end = max(
+                    current_range.0.points_in_file.end,
+                    next_range.0.points_in_file.end,
+                );
+                let (head, middle, tail) = (
+                    (min_start..intersection.start),
+                    intersection.clone(),
+                    (intersection.end..max_end),
+                );
+
+                // If tail is not empty, tail becomes the current_range and we move on to the next range
+                if !head.is_empty() {
+                    push_or_append_new_block((
+                        PointRange::new(current_range.0.file_index, head),
+                        if current_range.0.points_in_file.start < next_range.0.points_in_file.start
+                        {
+                            current_range.1
+                        } else {
+                            next_range.1
+                        },
+                    ));
+                }
+
+                if !tail.is_empty() {
+                    push_or_append_new_block((
+                        PointRange::new(current_range.0.file_index, middle),
+                        current_range.1.or(next_range.1),
+                    ));
+                    current_range.1 =
+                        if next_range.0.points_in_file.end > current_range.0.points_in_file.end {
+                            next_range.1
+                        } else {
+                            current_range.1
+                        };
+                    current_range.0.points_in_file = tail;
+                } else {
+                    current_range.0.points_in_file = middle;
+                    current_range.1 = current_range.1.or(next_range.1);
+                }
+                all_ranges.pop();
+            }
+        }
+
+        if !current_range.0.points_in_file.is_empty() {
+            push_or_append_new_block(current_range);
+        }
+    }
+
+    combined
+}
+
+/// Combines the potential blocks for refinement from two separate queries. This just combines two HashMaps
+/// together into a single one, containing the blocks of both `left` and `right`. In contrast to block merging
+/// (e.g. through `and_blocks_within_file`) this method does not care about overlapping blocks, partial or full
+/// matches etc. Every queried block from the two separate queries is potentially a candidate for refinement, so
+/// we don't merge/intersect any blocks
 fn combine_potential_blocks_for_refinement(
     left: FxHashMap<ValueType, FxHashSet<PointRange>>,
     mut right: FxHashMap<ValueType, FxHashSet<PointRange>>,
@@ -161,11 +324,25 @@ fn combine_potential_blocks_for_refinement(
     ret
 }
 
+enum CombineQueryResultsOperator {
+    And,
+    Or,
+}
+
 /// Combine the results of two block queries using the `AND` operator
-fn and_query_results(first: BlockQueryResult, second: BlockQueryResult) -> BlockQueryResult {
-    // Edge cases
-    if first.matching_blocks.is_empty() || second.matching_blocks.is_empty() {
-        return Default::default();
+fn combine_query_results(
+    first: BlockQueryResult,
+    second: BlockQueryResult,
+    operator: CombineQueryResultsOperator,
+) -> BlockQueryResult {
+    // Edge cases for AND
+    match operator {
+        CombineQueryResultsOperator::And => {
+            if first.matching_blocks.is_empty() || second.matching_blocks.is_empty() {
+                return Default::default();
+            }
+        }
+        _ => (),
     }
 
     let first_blocks_by_file = first.matching_blocks_by_file();
@@ -174,15 +351,27 @@ fn and_query_results(first: BlockQueryResult, second: BlockQueryResult) -> Block
     let mut combined_blocks = vec![];
 
     for (file_index, blocks) in first_blocks_by_file {
-        if !second_blocks_by_file.contains_key(&file_index) {
-            continue;
+        let other_blocks = second_blocks_by_file
+            .remove(&file_index)
+            .unwrap_or_default();
+        match operator {
+            CombineQueryResultsOperator::And => combined_blocks.append(
+                &mut and_blocks_within_file(blocks.into_iter(), other_blocks.into_iter()),
+            ),
+            CombineQueryResultsOperator::Or => combined_blocks.append(&mut or_blocks_within_file(
+                blocks.into_iter(),
+                other_blocks.into_iter(),
+            )),
         }
+    }
 
-        let other_blocks = second_blocks_by_file.remove(&file_index).unwrap();
-        combined_blocks.append(&mut and_blocks_within_file(
-            blocks.into_iter(),
-            other_blocks.into_iter(),
-        ));
+    match operator {
+        CombineQueryResultsOperator::Or => {
+            for (_, mut blocks) in second_blocks_by_file {
+                combined_blocks.append(&mut blocks);
+            }
+        }
+        _ => (),
     }
 
     combined_blocks.sort_by(|a, b| a.0.cmp(&b.0));
@@ -199,154 +388,6 @@ fn and_query_results(first: BlockQueryResult, second: BlockQueryResult) -> Block
         matching_blocks: combined_blocks,
         potential_blocks_for_refinement: merged_blocks_for_refinement,
     }
-}
-
-fn combine_ranges(
-    a: (Range<usize>, IndexResult),
-    b: (Range<usize>, IndexResult),
-    file_index: usize,
-) -> Vec<(PointRange, IndexResult)> {
-    use std::cmp::{max, min};
-
-    // Check if the ranges intersect
-    if a.0.end >= b.0.start && a.0.start <= b.0.end {
-        let lower_start = min(a.0.start, b.0.start);
-        let lower_end = max(a.0.start, b.0.start);
-        let upper_start = min(a.0.end, b.0.end);
-        let upper_end = max(a.0.end, b.0.end);
-
-        let mut result = Vec::new();
-
-        if lower_start != lower_end {
-            let index_result = if a.0.start < b.0.start { a.1 } else { b.1 };
-
-            result.push((
-                PointRange::new(file_index, lower_start..lower_end),
-                index_result,
-            ));
-        }
-
-        result.push((
-            PointRange::new(file_index, lower_end..upper_start),
-            a.1.or(b.1),
-        ));
-
-        if upper_start != upper_end {
-            let index_result = if a.0.end < b.0.end { a.1 } else { b.1 };
-            result.push((
-                PointRange::new(file_index, upper_start..upper_end),
-                index_result,
-            ));
-        }
-
-        result
-    } else {
-        vec![
-            (PointRange::new(file_index, a.0), a.1),
-            (PointRange::new(file_index, b.0), b.1),
-        ]
-    }
-}
-
-fn combine_query_ranges(
-    a: &[(Range<usize>, IndexResult)],
-    b: &[(Range<usize>, IndexResult)],
-    file_index: usize,
-) -> Vec<(PointRange, IndexResult)> {
-    let mut i = 0;
-    let mut j = 0;
-    let mut result = Vec::new();
-
-    while i < a.len() && j < b.len() {
-        let combined = combine_ranges(a[i].clone(), b[j].clone(), file_index);
-        match combined.len() {
-            1 => {
-                result.push(combined[0].clone());
-                i += 1;
-                j += 1;
-            }
-            2 => {
-                if a[i].0.start < b[j].0.start {
-                    result.push(combined[0].clone());
-                    i += 1;
-                } else {
-                    result.push(combined[1].clone());
-                    j += 1;
-                }
-            }
-            3 => {
-                result.push(combined[0].clone());
-                result.push(combined[1].clone());
-                i += 1;
-                j += 1;
-            }
-            _ => {}
-        }
-    }
-
-    while i < a.len() {
-        result.push((PointRange::new(file_index, a[i].0.clone()), a[i].1));
-        i += 1;
-    }
-
-    while j < b.len() {
-        result.push((PointRange::new(file_index, b[i].0.clone()), b[i].1));
-        j += 1;
-    }
-
-    result
-}
-
-/// Combine the results of two block queries using the `OR` operator
-fn or_query_results(first: BlockQueryResult, second: BlockQueryResult) -> BlockQueryResult {
-    todo!()
-    // We return all ranges in first AND second, but to be correct, we have to combine two ranges that overlap (within the same file) into a single range
-
-    // build a lookup table to make merging easier...
-    // let mut lookup: FxHashMap<
-    //     usize,
-    //     (
-    //         Vec<(Range<usize>, IndexResult)>,
-    //         Vec<(Range<usize>, IndexResult)>,
-    //     ),
-    // > = Default::default();
-
-    // for (point_range, index_result) in first {
-    //     if !lookup.contains_key(&point_range.file_index) {
-    //         lookup.insert(point_range.file_index, (vec![], vec![]));
-    //     }
-
-    //     lookup
-    //         .get_mut(&point_range.file_index)
-    //         .unwrap()
-    //         .0
-    //         .push((point_range.points_in_file, index_result));
-    // }
-
-    // for (point_range, index_result) in second {
-    //     if !lookup.contains_key(&point_range.file_index) {
-    //         lookup.insert(point_range.file_index, (vec![], vec![]));
-    //     }
-
-    //     lookup
-    //         .get_mut(&point_range.file_index)
-    //         .unwrap()
-    //         .1
-    //         .push((point_range.points_in_file, index_result));
-    // }
-
-    // let mut combined_ranges = vec![];
-
-    // for (file_index, (first_ranges, second_ranges)) in lookup {
-    //     let mut combined = combine_query_ranges(
-    //         first_ranges.as_slice(),
-    //         second_ranges.as_slice(),
-    //         file_index,
-    //     );
-    //     combined_ranges.append(&mut combined);
-    // }
-
-    // combined_ranges
 }
 
 /// Query the given index using the given query_fn. Helper function for redundant code when evaluating the
@@ -420,12 +461,12 @@ impl QueryExpression {
             QueryExpression::And(l_expr, r_expr) => {
                 let left_blocks = l_expr.eval(indices);
                 let right_blocks = r_expr.eval(indices);
-                and_query_results(left_blocks, right_blocks)
+                combine_query_results(left_blocks, right_blocks, CombineQueryResultsOperator::And)
             }
             QueryExpression::Or(l_expr, r_expr) => {
                 let left_blocks = l_expr.eval(indices);
                 let right_blocks = r_expr.eval(indices);
-                or_query_results(left_blocks, right_blocks)
+                combine_query_results(left_blocks, right_blocks, CombineQueryResultsOperator::Or)
             }
         }
     }
@@ -815,6 +856,128 @@ mod tests {
             let str1 = "|----|----|  ";
             let str2 = "   |---|----|";
             let str3 = "   |-|-|--|  ";
+            verify(str1, str2, str3);
+        }
+    }
+
+    #[test]
+    fn test_or_blocks_within_file() {
+        let verify = |in1: &str, in2: &str, expected_out: &str| {
+            let combined_blocks = or_blocks_within_file(
+                create_matching_blocks_from_str(in1).into_iter(),
+                create_matching_blocks_from_str(in2).into_iter(),
+            );
+            assert_eq!(
+                combined_blocks,
+                create_matching_blocks_from_str(expected_out)
+            );
+
+            // Swap in1 and in2, result should be the same!
+            let combined_blocks = or_blocks_within_file(
+                create_matching_blocks_from_str(in2).into_iter(),
+                create_matching_blocks_from_str(in1).into_iter(),
+            );
+            assert_eq!(
+                combined_blocks,
+                create_matching_blocks_from_str(expected_out)
+            );
+        };
+
+        {
+            let str1 = "|----|";
+            let str2 = "|----|";
+            let str3 = "|----|";
+            verify(str1, str2, str3);
+        }
+
+        {
+            let str1 = "|****|";
+            let str2 = "|****|";
+            let str3 = "|****|";
+            verify(str1, str2, str3);
+        }
+
+        {
+            let str1 = "|----|";
+            let str2 = "|****|";
+            let str3 = "|****|";
+            verify(str1, str2, str3);
+        }
+
+        {
+            let str1 = "|----|";
+            let str2 = "|**|  ";
+            let str3 = "|**|-|";
+            verify(str1, str2, str3);
+        }
+
+        {
+            let str1 = "|----|";
+            let str2 = "  |**|";
+            let str3 = "|-|**|";
+            verify(str1, str2, str3);
+        }
+
+        {
+            let str1 = "|----|";
+            let str2 = "  |-| ";
+            let str3 = "|----|";
+            verify(str1, str2, str3);
+        }
+
+        {
+            let str1 = "|----|   ";
+            let str2 = "   |----|";
+            let str3 = "|-------|";
+            verify(str1, str2, str3);
+        }
+
+        {
+            let str1 = "|----|   ";
+            let str2 = "   |****|";
+            let str3 = "|--|****|";
+            verify(str1, str2, str3);
+        }
+
+        {
+            let str1 = "|****|   ";
+            let str2 = "   |----|";
+            let str3 = "|****|--|";
+            verify(str1, str2, str3);
+        }
+
+        {
+            let str1 = "|----|----|";
+            let str2 = "   |---|   ";
+            let str3 = "|---------|";
+            verify(str1, str2, str3);
+        }
+
+        {
+            let str1 = "|****|****|";
+            let str2 = "   |---|   ";
+            let str3 = "|*********|";
+            verify(str1, str2, str3);
+        }
+
+        {
+            let str1 = "|****|****|   ";
+            let str2 = "   |---| |---|";
+            let str3 = "|*********|--|";
+            verify(str1, str2, str3);
+        }
+
+        {
+            let str1 = "|----|----|  ";
+            let str2 = "   |---|----|";
+            let str3 = "|-----------|";
+            verify(str1, str2, str3);
+        }
+
+        {
+            let str1 = "|----|   |----|  |---|";
+            let str2 = "     |---|    |--|    ";
+            let str3 = "|--------------------|";
             verify(str1, str2, str3);
         }
     }
