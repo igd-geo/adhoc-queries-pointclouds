@@ -5,7 +5,7 @@ use pasture_io::las_rs::raw::Header;
 
 use crate::{
     collect_points::PointBufferSend,
-    index::{IndexRefinement, PointRange, QueryExpression, Value},
+    index::{PointRange, QueryExpression, Value},
     stats::BlockQueryRuntimeTracker,
 };
 
@@ -21,7 +21,6 @@ pub trait CompiledQueryAtom: Sync + Send {
         block: PointRange,
         matching_indices: &'_ mut [bool],
         which_indices_to_loop_over: WhichIndicesToLoopOver,
-        index_refinements: &mut Option<Vec<IndexRefinement>>,
         runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<usize>;
 }
@@ -64,7 +63,6 @@ impl CompiledQueryExpression {
         matching_indices: &'a mut [bool],
         num_matches: usize,
         which_indices: WhichIndicesToLoopOver,
-        index_refinements: &mut Option<Vec<IndexRefinement>>,
         runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<usize> {
         match self {
@@ -74,7 +72,6 @@ impl CompiledQueryExpression {
                 block,
                 matching_indices,
                 which_indices,
-                index_refinements,
                 runtime_tracker,
             ),
             CompiledQueryExpression::And(left, right) => {
@@ -85,7 +82,6 @@ impl CompiledQueryExpression {
                     matching_indices,
                     num_matches,
                     which_indices,
-                    index_refinements,
                     runtime_tracker,
                 )?;
                 // second expression doesn't have to consider indices which are already false
@@ -96,7 +92,6 @@ impl CompiledQueryExpression {
                     matching_indices,
                     num_matches_left,
                     WhichIndicesToLoopOver::Matching,
-                    index_refinements,
                     runtime_tracker,
                 )
             }
@@ -108,7 +103,6 @@ impl CompiledQueryExpression {
                     matching_indices,
                     num_matches,
                     which_indices,
-                    index_refinements,
                     runtime_tracker,
                 )?;
                 // second expression doesn't have to consider indices which are already true
@@ -119,7 +113,6 @@ impl CompiledQueryExpression {
                     matching_indices,
                     num_matches_left,
                     WhichIndicesToLoopOver::NotMatching,
-                    index_refinements,
                     runtime_tracker,
                 )
             }

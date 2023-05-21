@@ -8,7 +8,7 @@ use pasture_core::nalgebra::Vector3;
 use pasture_derive::PointType;
 
 #[repr(C, packed)]
-#[derive(PointType, Copy, Clone, Debug, Default)]
+#[derive(PointType, Copy, Clone, Debug, Default, PartialEq)]
 pub struct Point {
     #[pasture(BUILTIN_POSITION_3D)]
     pub position: Vector3<f64>,

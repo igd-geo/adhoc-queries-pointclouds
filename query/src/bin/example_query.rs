@@ -7,7 +7,9 @@ use anyhow::Result;
 use pasture_core::nalgebra::Vector3;
 use query::{
     collect_points::{BufferCollector, CountCollector, ResultCollector},
-    index::{Classification, Position, ProgressiveIndex, QueryExpression, Value},
+    index::{
+        Classification, NoRefinementStrategy, Position, ProgressiveIndex, QueryExpression, Value,
+    },
 };
 use walkdir::WalkDir;
 
@@ -66,7 +68,12 @@ fn main() -> Result<()> {
     let dataset_id = progressive_index.add_dataset(paths.as_slice())?;
 
     let result_collector = Arc::new(Mutex::new(CountCollector::new()));
-    let stats = progressive_index.query(dataset_id, query_doc_aabb_l, result_collector.clone())?;
+    let stats = progressive_index.query(
+        dataset_id,
+        query_doc_all_buildings,
+        &NoRefinementStrategy,
+        result_collector.clone(),
+    )?;
 
     println!("{}", stats);
 

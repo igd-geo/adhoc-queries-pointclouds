@@ -1,11 +1,13 @@
 use std::{
     cmp::{max, min, Reverse},
     collections::BinaryHeap,
+    fmt::Display,
     ops::Range,
 };
 
 use pasture_core::nalgebra::Vector3;
 use rustc_hash::{FxHashMap, FxHashSet};
+use serde::{Deserialize, Serialize};
 
 use crate::util::{intersect_ranges, ranges_intersect};
 
@@ -73,16 +75,26 @@ impl IndexResult {
     }
 }
 
+#[typetag::serde(tag = "type")]
 pub trait Index: Send + Sync {
     fn within(&self, range: &Range<Value>, num_points_in_block: usize) -> IndexResult;
     fn equals(&self, data: &Value, num_points_in_block: usize) -> IndexResult;
     fn value_type(&self) -> ValueType;
 }
 
-#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone)]
+#[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize)]
 pub enum ValueType {
     Classification,
     Position3D,
+}
+
+impl Display for ValueType {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Classification => write!(f, "Classification"),
+            Self::Position3D => write!(f, "Position3D"),
+        }
+    }
 }
 
 #[derive(Copy, Clone, Debug)]
@@ -664,7 +676,7 @@ mod tests {
     /// This might look a bit silly, but helps with testing the matching blocks combination algorithms.
     fn create_matching_blocks_from_str<S: AsRef<str>>(string: S) -> Vec<(PointRange, IndexResult)> {
         let mut ret = vec![];
-        let mut string = string.as_ref();
+        let string = string.as_ref();
         let mut next_start_index = string.find('|');
 
         while let Some(start_index) = next_start_index {
@@ -978,6 +990,27 @@ mod tests {
             let str1 = "|----|   |----|  |---|";
             let str2 = "     |---|    |--|    ";
             let str3 = "|--------------------|";
+            verify(str1, str2, str3);
+        }
+
+        {
+            let str1 = "|----|----|";
+            let str2 = "";
+            let str3 = "|---------|";
+            verify(str1, str2, str3);
+        }
+
+        {
+            let str1 = "|----| |----|";
+            let str2 = "";
+            let str3 = "|----| |----|";
+            verify(str1, str2, str3);
+        }
+
+        {
+            let str1 = "|----|****|";
+            let str2 = "";
+            let str3 = "|----|****|";
             verify(str1, str2, str3);
         }
     }

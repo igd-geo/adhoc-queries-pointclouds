@@ -149,32 +149,40 @@ mod tests {
         let bounds = AABB::from_min_max(Point3::new(-5.0, -5.0, -5.0), Point3::new(5.0, 5.0, 5.0));
         let mut grid = SparseGrid::new(bounds, 1.0)?;
 
-        grid.insert_point(Point {
-            position: Vector3::new(-4.5, -4.6, -4.7),
-            ..Default::default()
-        });
+        let expected_points = vec![
+            Point {
+                position: Vector3::new(-4.5, -4.6, -4.7),
+                ..Default::default()
+            },
+            Point {
+                position: Vector3::new(-3.5, -4.5, -4.4),
+                ..Default::default()
+            },
+        ];
 
-        grid.insert_point(Point {
-            position: Vector3::new(-3.5, -4.5, -4.4),
-            ..Default::default()
-        });
+        for point in &expected_points {
+            grid.insert_point(*point);
+        }
 
         let cells = grid.cells().copied().collect::<HashSet<_>>();
         let expected_cells: HashSet<u64> = [0, 1].iter().copied().collect::<HashSet<_>>();
         assert_eq!(expected_cells, cells);
 
-        let points = grid.points().collect::<Vec<_>>();
+        // Order of the points is random, but we can't collect them in a HashSet because they also can't implement Eq...
+        let points = grid.points().copied().collect::<Vec<_>>();
         assert_eq!(points.len(), 2);
 
-        let first_point_position = points[0].position;
-        assert_eq!(first_point_position.x, -4.5);
-        assert_eq!(first_point_position.y, -4.6);
-        assert_eq!(first_point_position.z, -4.7);
+        let expected_points_different_order =
+            expected_points.iter().copied().rev().collect::<Vec<_>>();
 
-        let second_point_position = points[1].position;
-        assert_eq!(second_point_position.x, -3.5);
-        assert_eq!(second_point_position.y, -4.5);
-        assert_eq!(second_point_position.z, -4.4);
+        let points_are_equal =
+            points == expected_points || points == expected_points_different_order;
+
+        assert!(
+            points_are_equal,
+            "Expected points {:?} (in any order) but got points {:?}",
+            expected_points, points
+        );
 
         Ok(())
     }

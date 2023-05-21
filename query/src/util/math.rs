@@ -14,13 +14,13 @@ pub fn intersect_ranges(range1: &Range<usize>, range2: &Range<usize>) -> Range<u
 }
 
 /// Returns true if the two ranges intersect. These examples intersect:
-/// ```
+/// ```ignore
 /// range1: |---|        |----|       |----|  |-----|
 /// range2:   |---|   |----|     |----|         |-|
 /// ```
 ///
 /// These examples don't intersect:
-/// ```
+/// ```ignore
 /// range1: |---|
 /// range2:       |---|
 /// ```

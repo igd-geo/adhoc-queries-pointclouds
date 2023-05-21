@@ -1,14 +1,11 @@
 use crate::{
     collect_points::PointBufferSend,
-    index::{
-        Block, Classification, Index, IndexRefinement, PointRange, Position, PositionIndex,
-        ValueType,
-    },
+    index::{Classification, PointRange, Position},
     stats::{BlockQueryRuntimeTracker, BlockQueryRuntimeType},
 };
 use anyhow::Result;
 use byteorder::{LittleEndian, NativeEndian, ReadBytesExt, WriteBytesExt};
-use divide_range::RangeDivisions;
+
 use log::info;
 use pasture_core::{
     containers::{InterleavedPointBufferMut, InterleavedVecPointStorage, PointBufferWriteable},
@@ -42,8 +39,20 @@ pub(crate) fn to_local_integer_position(
     )
 }
 
+/// Convert from a position in local space to a world space using the given LAS file header
+pub(crate) fn to_world_space_position(
+    position_local: &Vector3<i32>,
+    las_header: &raw::Header,
+) -> Vector3<f64> {
+    Vector3::new(
+        (position_local.x as f64 * las_header.x_scale_factor) + las_header.x_offset,
+        (position_local.y as f64 * las_header.y_scale_factor) + las_header.y_offset,
+        (position_local.z as f64 * las_header.z_scale_factor) + las_header.z_offset,
+    )
+}
+
 /// Calculates the world-space bounding box for the given range of points in the given file
-fn get_bounds_of_point_range(
+fn _get_bounds_of_point_range(
     file: &mut Cursor<&[u8]>,
     file_header: &raw::Header,
     point_range: Range<usize>,
@@ -314,51 +323,10 @@ impl CompiledQueryAtom for LasQueryAtomWithin<Position> {
         block: PointRange,
         matching_indices: &'_ mut [bool],
         which_indices_to_loop_over: super::WhichIndicesToLoopOver,
-        index_refinements: &mut Option<Vec<IndexRefinement>>,
         runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<usize> {
         let local_min = to_local_integer_position(&self.min.0, file_header);
         let local_max = to_local_integer_position(&self.max.0, file_header);
-
-        // TODO Try something out: Naively split the block into 4 smaller blocks
-        // TODO We can play with the number of splits in general, but we could also e.g. only split off the first N%
-        // of points. Might be a way to control the amount of time spent in refinement
-        if let Some(index_refinements) = index_refinements {
-            if block.points_in_file.clone().len() > 4 * Block::MIN_BLOCK_SIZE {
-                let timer = Instant::now();
-                let refined_indices = block
-                    .points_in_file
-                    .clone()
-                    .divide_evenly_into(4)
-                    .map(
-                        |new_block| -> Result<(PointRange, Box<dyn Index + 'static>)> {
-                            let bounds =
-                                get_bounds_of_point_range(file, file_header, new_block.clone())?;
-                            let new_index = PositionIndex::new(bounds);
-                            Ok((
-                                PointRange {
-                                    file_index: block.file_index,
-                                    points_in_file: new_block,
-                                },
-                                Box::new(new_index),
-                            ))
-                        },
-                    )
-                    .collect::<Result<Vec<_>, _>>()?;
-
-                index_refinements.push(IndexRefinement {
-                    point_range_before_refinement: block.clone(),
-                    value_type: ValueType::Position3D,
-                    refined_indices,
-                });
-
-                runtime_tracker.log_runtime(
-                    block.clone(),
-                    BlockQueryRuntimeType::Refinement,
-                    timer.elapsed(),
-                );
-            }
-        }
 
         let test_point = |point_index: usize| -> Result<bool> {
             // Seek to point start, read X, Y, and Z in LAS i32 format and check
@@ -403,7 +371,6 @@ impl CompiledQueryAtom for LasQueryAtomWithin<Classification> {
         block: PointRange,
         matching_indices: &'_ mut [bool],
         which_indices_to_loop_over: super::WhichIndicesToLoopOver,
-        _index_refinements: &mut Option<Vec<IndexRefinement>>,
         runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<usize> {
         let offset_to_classification = if file_header.point_data_record_format > 5 {
@@ -441,7 +408,6 @@ impl CompiledQueryAtom for LasQueryAtomEquals<Position> {
         block: PointRange,
         matching_indices: &'_ mut [bool],
         which_indices_to_loop_over: super::WhichIndicesToLoopOver,
-        _index_refinements: &mut Option<Vec<IndexRefinement>>,
         runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<usize> {
         let local_position = to_local_integer_position(&self.value.0, file_header);
@@ -488,7 +454,6 @@ impl CompiledQueryAtom for LasQueryAtomEquals<Classification> {
         block: PointRange,
         matching_indices: &'_ mut [bool],
         which_indices_to_loop_over: super::WhichIndicesToLoopOver,
-        _index_refinements: &mut Option<Vec<IndexRefinement>>,
         runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<usize> {
         let offset_to_classification = if file_header.point_data_record_format > 5 {

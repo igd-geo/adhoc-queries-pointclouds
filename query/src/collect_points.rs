@@ -74,7 +74,7 @@ impl ResultCollector for StdOutCollector {
         0
     }
 
-    fn collect(&mut self, points: Box<dyn PointBufferSend>) {
+    fn collect(&mut self, _points: Box<dyn PointBufferSend>) {
         unimplemented!()
     }
 }
@@ -115,7 +115,7 @@ impl ResultCollector for GridSampledCollector {
         self.grid.points().count()
     }
 
-    fn collect(&mut self, points: Box<dyn PointBufferSend>) {
+    fn collect(&mut self, _points: Box<dyn PointBufferSend>) {
         unimplemented!()
     }
 }

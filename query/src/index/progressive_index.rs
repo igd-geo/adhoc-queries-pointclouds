@@ -16,12 +16,12 @@
 //      3.5) Implement some refinement procedure that generates or improves the index for each block (this is TBD)
 
 use anyhow::{anyhow, bail, Context, Result};
-use itertools::Itertools;
 use log::info;
 use memmap::Mmap;
 use pasture_io::{base::IOFactory, las_rs::raw};
 use rayon::prelude::*;
-use rustc_hash::FxHashMap;
+use rustc_hash::{FxHashMap, FxHashSet};
+use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     ffi::OsStr,
@@ -35,56 +35,73 @@ use std::{
     time::Instant,
 };
 
-use super::{Block, BlockIndex, IndexResult, PointRange, PositionIndex, Query, ValueType};
+use super::{
+    Block, BlockIndex, IndexResult, PointRange, PositionIndex, Query, RefinementStrategy, ValueType,
+};
 use crate::{
     collect_points::ResultCollector,
-    index::IndexRefinement,
     search::{compile_query, Extractor, LASExtractor, WhichIndicesToLoopOver},
     stats::{BlockQueryRuntimeTracker, QueryStats},
 };
 
-struct KnownDataset {
+/// Result of a rough query: A set of blocks in each file and a set of blocks that might be
+/// good candidates for refinement
+#[derive(Debug, Default)]
+pub struct RoughQueryResult {
+    /// Collection of matching blocks (sorted ascending) per file in a dataset
+    matching_blocks: FxHashMap<usize, Vec<(PointRange, IndexResult)>>,
+    /// Set of blocks for each ValueType that are candidates for index refinement
+    blocks_for_refinement: FxHashMap<ValueType, FxHashSet<PointRange>>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct KnownDataset {
     files: Vec<PathBuf>,
     indices: FxHashMap<ValueType, BlockIndex>,
     common_file_extension: String,
 }
 
 impl KnownDataset {
-    pub(crate) fn get_matching_blocks(
-        &self,
-        query: &Query,
-    ) -> FxHashMap<usize, Vec<(PointRange, IndexResult)>> {
+    /// Evaluate the rough query, i.e. the query that returns a set of `PointRange`s that contain points that might
+    /// match the query. The rough query also returns a set of blocks per index that are candidates for index refinement
+    pub fn rough_query(&self, query: &Query) -> RoughQueryResult {
         // Which indices does the query need?
         // If only one index, loop over the blocks of that index and filter them using the query
         // If multiple indices, get an iterator over all blocks per index and start with the first block in each index. Advance the iterator
         // for the smallest block(s) and always evaluate using all indices for the current blocks
 
-        let mut result: FxHashMap<usize, Vec<(PointRange, IndexResult)>> = Default::default();
-
-        for (point_range, query_result) in query.eval(&self.indices).matching_blocks {
-            match query_result {
-                IndexResult::MatchAll | IndexResult::MatchSome => {
-                    if let Some(blocks_of_file) = result.get_mut(&point_range.file_index) {
-                        blocks_of_file.push((point_range, query_result));
-                    } else {
-                        result.insert(point_range.file_index, vec![(point_range, query_result)]);
-                    }
-                }
-                _ => (),
-            }
+        let query_result = query.eval(&self.indices);
+        RoughQueryResult {
+            matching_blocks: query_result.matching_blocks_by_file(),
+            blocks_for_refinement: query_result.potential_blocks_for_refinement,
         }
+    }
 
-        result
+    /// Access to the indices of this dataset
+    pub fn indices(&self) -> &FxHashMap<ValueType, BlockIndex> {
+        &self.indices
     }
 
     /// Apply the given range of IndexRefinements to the indices of this dataset
-    fn apply_refinements<I: Iterator<Item = IndexRefinement>>(&mut self, refinements: I) {
+    fn apply_refinements<I: Iterator<Item = (ValueType, FxHashSet<PointRange>)>>(
+        &mut self,
+        refinements: I,
+        refinement_strategy: &dyn RefinementStrategy,
+    ) -> Result<()> {
         // Group refinements by their index ValueType, then apply each set of refinements to each of the indices
-        for (value_type, refinements) in &refinements.group_by(|refinement| refinement.value_type) {
+        for (value_type, refinements) in refinements {
             if let Some(index) = self.indices.get_mut(&value_type) {
-                index.apply_refinements(refinements);
+                let actual_candidates = refinement_strategy.select_best_candidates(refinements);
+                index
+                    .apply_refinements(actual_candidates.into_iter(), value_type, &self.files)
+                    .context(format!(
+                        "Failed to refine index for ValueType {}",
+                        value_type
+                    ))?;
             }
         }
+
+        Ok(())
     }
 }
 
@@ -101,6 +118,12 @@ impl ProgressiveIndex {
         }
     }
 
+    pub fn with_datasets(datasets: HashMap<DatasetID, KnownDataset>) -> Self {
+        Self { datasets }
+    }
+
+    /// Adds a new dataset to the ProgressiveIndex. A dataset is modeled as a set of files, for which the ProgressiveIndex
+    /// will build an initial, very rough block index
     pub fn add_dataset<'a, P: AsRef<Path>>(&mut self, files: &'a [P]) -> Result<DatasetID> {
         info!("Adding new dataset");
         let id = self.datasets.len();
@@ -120,10 +143,13 @@ impl ProgressiveIndex {
         Ok(id)
     }
 
+    /// Run a query on the ProgressiveIndex for the given dataset. The resulting points of the query are collected by
+    /// the given `result_collector`
     pub fn query(
         &mut self,
         dataset_id: DatasetID,
         query: Query,
+        refinement_strategy: &dyn RefinementStrategy,
         result_collector: Arc<Mutex<dyn ResultCollector>>,
     ) -> Result<QueryStats> {
         info!("Querying dataset {}", dataset_id);
@@ -145,7 +171,7 @@ impl ProgressiveIndex {
         };
 
         // Query with index to get matching blocks, group the blocks by their file
-        let blocks_per_file = dataset.get_matching_blocks(&query);
+        let rough_query_result = dataset.rough_query(&query);
 
         let largest_block = dataset
             .indices
@@ -160,9 +186,10 @@ impl ProgressiveIndex {
         let total_points_queried = AtomicUsize::new(0);
         let matching_points = AtomicUsize::new(0);
 
-        let refined_indices = blocks_per_file
+        rough_query_result
+            .matching_blocks
             .into_par_iter()
-            .map(|(file_id, blocks)| -> Result<Vec<IndexRefinement>> {
+            .map(|(file_id, blocks)| -> Result<()> {
                 let path = dataset.files[file_id].as_path();
 
                 // TODO This is LAS-specific, extract this
@@ -173,18 +200,13 @@ impl ProgressiveIndex {
                 let raw_header = raw::Header::read_from(&mut Cursor::new(file_data))
                     .context("Can't read LAS header")?;
 
-                let refined_indices = blocks
+                blocks
                     .into_par_iter()
                     .map_with(
                         all_matching_indices.clone(),
-                        |all_matching_indices,
-                         (point_range, index_result)|
-                         -> Result<Vec<IndexRefinement>> {
+                        |all_matching_indices, (point_range, index_result)| -> Result<()> {
                             let block_length = point_range.points_in_file.len();
                             let mut cursor = Cursor::new(file_data);
-
-                            // Simpler way to refine would be to refine as a separate step AFTER evaluating the query
-                            let mut refined_indices = Some(vec![]);
 
                             let matching_indices_within_this_block =
                                 &mut all_matching_indices[..block_length];
@@ -219,7 +241,6 @@ impl ProgressiveIndex {
                                         matching_indices_within_this_block,
                                         block_length,
                                         WhichIndicesToLoopOver::All,
-                                        &mut refined_indices,
                                         &runtime_tracker,
                                     )?;
                                     let data = data_extractor
@@ -243,16 +264,21 @@ impl ProgressiveIndex {
                         "get_matching_blocks should not return a block with IndexResult::NoMatch"
                     ),
                             }
-                            Ok(refined_indices.unwrap())
+                            Ok(())
                         },
                     )
                     .collect::<Result<Vec<_>, _>>()?;
 
-                Ok(refined_indices.into_iter().flatten().collect())
+                Ok(())
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        dataset.apply_refinements(refined_indices.into_iter().flatten());
+        dataset
+            .apply_refinements(
+                rough_query_result.blocks_for_refinement.into_iter(),
+                refinement_strategy,
+            )
+            .context("Failed to refine index")?;
 
         // info!(
         //     "Blocks queried: {} full, {} partial ({} total in dataset)",
@@ -271,6 +297,11 @@ impl ProgressiveIndex {
             matching_points: matching_points.into_inner(),
             runtime: timer.elapsed(),
         })
+    }
+
+    /// Returns all known datasets for this ProgressiveIndex
+    pub fn datasets(&self) -> &HashMap<DatasetID, KnownDataset> {
+        &self.datasets
     }
 }
 

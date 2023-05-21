@@ -1,11 +1,40 @@
-use std::{fmt::Display, ops::Range};
+use std::{fmt::Display, ops::Range, path::PathBuf};
 
-use pasture_core::{containers::PointBuffer, math::AABB, nalgebra::Point3};
+use anyhow::{Context, Result};
+use divide_range::RangeDivisions;
+use itertools::Itertools;
+use pasture_core::{
+    math::AABB,
+    nalgebra::{Point3, Vector3},
+};
 use rustc_hash::FxHashMap;
+use serde::{Deserialize, Serialize};
+
+use crate::io::{open_reader, PointReader};
 
 use super::{Index, IndexResult, Value, ValueType};
 
+// TODO pasture_core does not support serde, maybe implement it?
+
+#[derive(Serialize, Deserialize)]
+#[serde(remote = "AABB<f64>")]
+struct AABBDeff64 {
+    #[serde(getter = "AABB::min")]
+    min: Point3<f64>,
+    #[serde(getter = "AABB::max")]
+    max: Point3<f64>,
+}
+
+impl From<AABBDeff64> for AABB<f64> {
+    fn from(def: AABBDeff64) -> Self {
+        AABB::<f64>::from_min_max_unchecked(def.min, def.max)
+    }
+}
+
+/// Index over positions using an AABB
+#[derive(Serialize, Deserialize)]
 pub struct PositionIndex {
+    #[serde(with = "AABBDeff64")]
     bounds: AABB<f64>,
 }
 
@@ -13,8 +42,26 @@ impl PositionIndex {
     pub fn new(bounds: AABB<f64>) -> Self {
         Self { bounds }
     }
+
+    /// Create a new `PositionIndex` from the given range of positions
+    ///
+    /// # Panics
+    ///
+    /// If `positions` is an empty range
+    pub fn build_from_positions<I: Iterator<Item = Vector3<f64>>>(mut positions: I) -> Self {
+        let first_position = positions
+            .next()
+            .expect("Can't build a PositionIndex from an empty range of positions!");
+
+        let mut bounds = AABB::from_min_max_unchecked(first_position.into(), first_position.into());
+        for position in positions {
+            bounds = AABB::extend_with_point(&bounds, &position.into());
+        }
+        Self { bounds }
+    }
 }
 
+#[typetag::serde]
 impl Index for PositionIndex {
     fn within(&self, range: &Range<Value>, _num_points_in_block: usize) -> IndexResult {
         match (&range.start, &range.end) {
@@ -51,17 +98,34 @@ impl Index for PositionIndex {
     }
 }
 
+/// Histogram-based index over classifications
+#[derive(Serialize, Deserialize)]
 pub struct ClassificationIndex {
     // This is a full histogram, not a sample, i.e. it contains the counts of ALL points within a block!
     histogram: FxHashMap<u8, usize>,
 }
 
 impl ClassificationIndex {
+    /// Creates a new `ClassificationIndex` from the given histogram
     pub fn new(histogram: FxHashMap<u8, usize>) -> Self {
+        Self { histogram }
+    }
+
+    /// Builds a `ClassificationIndex` from the given range of classification values
+    pub fn build_from_classifications<I: Iterator<Item = u8>>(classifications: I) -> Self {
+        let mut histogram: FxHashMap<u8, usize> = Default::default();
+        for class in classifications {
+            if let Some(count) = histogram.get_mut(&class) {
+                *count += 1;
+            } else {
+                histogram.insert(class, 1);
+            }
+        }
         Self { histogram }
     }
 }
 
+#[typetag::serde]
 impl Index for ClassificationIndex {
     fn within(&self, range: &Range<Value>, num_points_in_block: usize) -> IndexResult {
         match (&range.start, &range.end) {
@@ -110,7 +174,7 @@ impl Index for ClassificationIndex {
     }
 }
 
-#[derive(Clone, Debug, Hash, PartialEq, Eq)]
+#[derive(Clone, Debug, Hash, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PointRange {
     pub file_index: usize,
     pub points_in_file: Range<usize>,
@@ -151,6 +215,7 @@ impl Display for PointRange {
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct Block {
     point_range: PointRange,
     index: Option<Box<dyn Index>>,
@@ -162,9 +227,6 @@ impl Block {
     /// per point, that would waste a huge amount of memory and performance
     pub const MIN_BLOCK_SIZE: usize = 1 << 10;
 
-    // TODO Implement block refinement next. Question: What if we have a refined block ONLY for position, what happens to the other indices?
-    // i.e. how does the datastructure look like for block refinement? Is it a tree / something like a BVH?
-
     pub fn new(points_in_file: Range<usize>, file_index: usize) -> Self {
         Self {
             point_range: PointRange {
@@ -172,6 +234,20 @@ impl Block {
                 points_in_file,
             },
             index: None,
+        }
+    }
+
+    pub fn with_index(
+        points_in_file: Range<usize>,
+        file_index: usize,
+        index: Box<dyn Index>,
+    ) -> Self {
+        Self {
+            point_range: PointRange {
+                file_index,
+                points_in_file,
+            },
+            index: Some(index),
         }
     }
 
@@ -204,21 +280,78 @@ impl Block {
 
     /// Refines this block using the given data at the given indices (all indices that are `true` in `matching_indices`)
     /// Returns one block if no refinement can be done, or multiple blocks after refinement
-    pub fn refine(&self, _data: &dyn PointBuffer, _matching_indices: &[bool]) -> Vec<Block> {
-        // How to refine?
-        // We could look for the longest contiguous sequence of `true` values inside `matching_indices`, and if this sequence exceeds
-        // some length, this might warrant a new block. We would need something like a minimum block size (otherwise the index becomes too big)
-        // and also an improvement criterion. If the index for the new smaller block is not significantly better than the current index, we
-        // should not refine! As an example: Suppose this block has a position index with bounds (0,0,0) (1,1,1) and references 1M points. If
-        // we find a sequence of e.g. 50k points, but their bounds would be (0.05, 0.05, 0.05) (1,1,1), then it doesn't make sense to refine, because
-        // the new index is only marginally better than the old one
-        //
-        // Refinement also has to happen for each index, which is a bit weird, because index A might be refineable, but index B not. What to do then?
-        // Would it make more sense to have one (block-)index per attribute and combine their results accordingly in the queries?
-        todo!()
+    pub fn refine(
+        &self,
+        value_type: ValueType,
+        reader: &mut dyn PointReader,
+    ) -> Result<Vec<Block>> {
+        // So either we have an index, in which case we split it up into smaller indices, or we don't, in which
+        // case we still could create the smaller number of indices (because the RefinementStrategy has determined
+        // that we have the time to refine this index, which means we have the time to scan through all points of
+        // this index)
+
+        // Depending on how large the block is, split it into either 2 or 4 sub-blocks
+        // We can experiment with refinement strategies here, this is just a first test
+        let num_splits = match self.point_range.points_in_file.len() / Self::MIN_BLOCK_SIZE {
+            0..=1 => panic!("Should not refine block that is less than 2x the MIN_BLOCK_SIZE"),
+            2..=3 => 2,
+            _ => 4,
+        };
+
+        let new_block_ranges = self
+            .point_range
+            .points_in_file
+            .clone()
+            .divide_evenly_into(num_splits);
+
+        match value_type {
+            ValueType::Classification => {
+                let classifications = reader
+                    .read_classifications(self.point_range.points_in_file.clone())
+                    .context("Could not read classifications")?;
+
+                let start_index = self.point_range.points_in_file.start;
+                Ok(new_block_ranges
+                    .map(|new_block_range| {
+                        let local_range = (new_block_range.start - start_index)
+                            ..(new_block_range.end - start_index);
+                        let classification_index = ClassificationIndex::build_from_classifications(
+                            classifications[local_range].into_iter().copied(),
+                        );
+                        Block::with_index(
+                            new_block_range,
+                            self.point_range.file_index,
+                            Box::new(classification_index),
+                        )
+                    })
+                    .collect())
+            }
+            ValueType::Position3D => {
+                let positions = reader
+                    .read_positions(self.point_range.points_in_file.clone())
+                    .context("Could not read positions")?;
+
+                let start_index = self.point_range.points_in_file.start;
+                Ok(new_block_ranges
+                    .map(|new_block_range| {
+                        let local_range = (new_block_range.start - start_index)
+                            ..(new_block_range.end - start_index);
+                        let positions_index = PositionIndex::build_from_positions(
+                            positions[local_range].into_iter().copied(),
+                        );
+                        Block::with_index(
+                            new_block_range,
+                            self.point_range.file_index,
+                            Box::new(positions_index),
+                        )
+                    })
+                    .collect())
+            }
+        }
     }
 }
 
+#[derive(Serialize, Deserialize)]
 pub struct BlockIndex {
     blocks: Vec<Block>,
 }
@@ -245,31 +378,45 @@ impl BlockIndex {
     }
 
     /// Apply the given index refinements to this BlockIndex
-    pub fn apply_refinements<I: Iterator<Item = IndexRefinement>>(&mut self, refinements: I) {
-        for refinement in refinements {
-            let old_point_range = refinement.point_range_before_refinement;
-            let new_blocks = refinement
-                .refined_indices
-                .into_iter()
-                .map(|(point_range, index)| Block {
-                    index: Some(index),
-                    point_range,
-                });
+    pub fn apply_refinements<I: Iterator<Item = PointRange>>(
+        &mut self,
+        blocks_to_refine: I,
+        value_type: ValueType,
+        files: &[PathBuf],
+    ) -> Result<()> {
+        // We can refine all blocks that are passed to this method because candidate selection happens within the
+        // ProgressiveIndex
 
-            let pos_of_old_block = self
-                .blocks
-                .iter()
-                .position(|block| block.point_range == old_point_range)
-                .expect("Original block for refinement not found!");
-            self.blocks
-                .splice(pos_of_old_block..=pos_of_old_block, new_blocks);
+        for (file_index, blocks_in_file) in &blocks_to_refine.group_by(|block| block.file_index) {
+            let mut reader = open_reader(&files[file_index]).context(format!(
+                "Can't open reader to file {}",
+                files[file_index].display()
+            ))?;
+
+            // Refine all blocks that are large enough to be refined. We can't guarantee that the refinement strategy
+            // always gives valid blocks, since users might implement their own refinement strategy
+            for block_in_file in blocks_in_file
+                .filter(|block| block.points_in_file.len() >= 2 * Block::MIN_BLOCK_SIZE)
+            {
+                // TODO Maybe we won't find the exact block, because the input ranges might have been combined? But I think
+                // I implemented it in a way that we always get exact matches and never combine the 'to-refine' ranges!
+                let position_of_old_block = self
+                    .blocks
+                    .iter()
+                    .position(|block| block.point_range == block_in_file)
+                    .expect("Original block for refinement not found!");
+
+                let block = &self.blocks[position_of_old_block];
+                let refined_blocks = block
+                    .refine(value_type, reader.as_mut())
+                    .context("Failed to refine block")?;
+                self.blocks.splice(
+                    position_of_old_block..=position_of_old_block,
+                    refined_blocks,
+                );
+            }
         }
-    }
-}
 
-/// Result of an index refinement. Contains the new indices for a specific range of points
-pub struct IndexRefinement {
-    pub point_range_before_refinement: PointRange,
-    pub value_type: ValueType,
-    pub refined_indices: Vec<(PointRange, Box<dyn Index>)>,
+        Ok(())
+    }
 }

@@ -6,3 +6,6 @@ pub use self::query::*;
 
 mod progressive_index;
 pub use self::progressive_index::*;
+
+mod refinement;
+pub use self::refinement::*;
