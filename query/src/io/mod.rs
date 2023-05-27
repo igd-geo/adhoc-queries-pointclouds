@@ -2,4 +2,4 @@ mod reader;
 pub use self::reader::*;
 
 mod las;
-pub use self::las::*;
+pub(crate) use self::las::*;

@@ -30,7 +30,7 @@ impl SparseGrid {
         let y_bits = f64::ceil(f64::log2(num_cells_per_dimension.y)) as u64;
         let z_bits = f64::ceil(f64::log2(num_cells_per_dimension.z)) as u64;
         if (x_bits + y_bits + z_bits) as usize > (std::mem::size_of::<u64>() * 8) {
-            return Err(anyhow!("Too many cells ({}*{}*{}) in SparseGrid! The number of cells exceeds the capacity of a u64 index!"));
+            return Err(anyhow!("Too many cells ({}*{}*{}) in SparseGrid! The number of cells exceeds the capacity of a u64 index!", num_cells_per_dimension.x, num_cells_per_dimension.y, num_cells_per_dimension.z));
         }
 
         Ok(Self {

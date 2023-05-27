@@ -2,14 +2,14 @@
 name = "query"
 version = "0.1.0"
 authors = ["pbormann"]
-edition = "2018"
+edition = "2021"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 memmap = "0.7.0"
 rayon = "1.4.0"
-clap = "2.33.3"
+clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
 anyhow = { version = "1", features = ["backtrace"] }
 bincode = "1.3.1"
@@ -21,22 +21,20 @@ pasture-derive = "0.2.0"
 readers = {path = "../readers"}
 statrs = "0.14.0"
 num_cpus = "1.13.0"
-tokio = {version = "1.6.0", features = ["full"] }
-tokio-postgres = {version = "0.7.2", features = ["runtime", "with-chrono-0_4", "with-geo-types-0_7"] }
-postgres-types = {version = "0.2.1", features = ["derive"] }
-postgis = "0.8.0"
 rustc-hash = "1.1.0"
 itertools = "0.10.5"
 walkdir = "2.3.2"
 log = "0.4.17"
 pretty_env_logger = "0.4.0"
+dotenv = "0.15.0"
 divide_range = "0.1.1"
 human-repr = "1"
 scopeguard = "1.1.0"
 typetag = "0.2"
+rand = "0.8.5"
+experiment-archiver = { git = "https://github.com/Mortano/experiment-archiver-rs" }
 
 [dev-dependencies]
-rand = "0.8.5"
 regex = "1"
 
 [profile.release]

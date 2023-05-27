@@ -23,6 +23,25 @@
             },
         },
         {
+            "name": "extract_performance_test (Debug)",
+            "type": "lldb",
+            "request": "launch",
+            "cargo": {
+                "args": [
+                    "build",
+                    "--bin=extract_performance_test",
+                ]
+            },
+            "args": [
+                "/Users/pbormann/data/geodata/pointclouds/datasets/navvis_m6_5thFloor/NavVisHQ-5thFloor.las"
+            ],
+            "cwd": "${workspaceFolder}",
+            "env": {
+                "RUST_LOG": "info",
+                "RUST_BACKTRACE": "1",
+            },
+        },
+        {
             "name": "Launch (Release)",
             "type": "lldb",
             "request": "launch",

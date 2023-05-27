@@ -99,7 +99,7 @@ impl Extractor for LASExtractor {
         file: &mut Cursor<&[u8]>,
         file_header: &raw::Header,
         block: PointRange,
-        matching_indices: &mut [bool],
+        matching_indices: &[bool],
         num_matches: usize,
         runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<Box<dyn PointBufferSend>> {

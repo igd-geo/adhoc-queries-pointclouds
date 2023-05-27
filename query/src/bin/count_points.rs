@@ -4,7 +4,7 @@ use std::{
 };
 
 use anyhow::{anyhow, Context, Result};
-use clap::{value_t, App, Arg};
+use clap::Parser;
 use pasture_io::base::IOFactory;
 
 fn get_all_input_files<P: AsRef<Path>>(path: P) -> Result<Vec<PathBuf>> {
@@ -76,21 +76,16 @@ fn count_points_in_dataset<P: AsRef<Path>>(path_to_dataset: P) -> Result<usize> 
     Ok(points_per_file.into_iter().sum())
 }
 
-fn main() -> Result<()> {
-    let matches = App::new("Point cloud queries - count points")
-                          .version("0.1")
-                          .author("Pascal Bormann <pascal.bormann@igd.fraunhofer.de>")
-                          .about("Counts the number of points in a given point cloud")
-                          .arg(Arg::with_name("INPUT")
-                               .short("i")
-                               .long("input")
-                               .value_name("FILE")
-                               .help("Input point cloud. Can be a single file or a directory. Directories are scanned recursively for all point cloud files with supported formats LAS, LAZ, LAST, LAZT, LASER, LAZER.")
-                               .takes_value(true)
-                            .required(true))
-                          .get_matches();
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    input: PathBuf,
+}
 
-    let in_path = value_t!(matches, "INPUT", String).context("Argument 'INPUT' not found")?;
+fn main() -> Result<()> {
+    let args = Args::parse();
+
+    let in_path = args.input;
     let count = count_points_in_dataset(&in_path).context("Error while counting points")?;
 
     println!("{}", count);
