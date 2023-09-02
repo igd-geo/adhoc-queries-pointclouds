@@ -4,8 +4,8 @@ use anyhow::Result;
 use pasture_core::nalgebra::Vector3;
 use query::{
     index::{
-        Classification, CompareExpression, NoRefinementStrategy, Position, ProgressiveIndex,
-        QueryExpression, Value,
+        AtomicExpression, Classification, CompareExpression, NoRefinementStrategy, Position,
+        ProgressiveIndex, QueryExpression, Value,
     },
     io::NullOutput,
 };
@@ -33,23 +33,23 @@ fn main() -> Result<()> {
         "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/las",
     ));
 
-    let query_doc_aabb_s = QueryExpression::Within(
+    let query_doc_aabb_s = QueryExpression::Atomic(AtomicExpression::Within(
         Value::Position(Position(Vector3::new(390000.0, 130000.0, 0.0)))
             ..Value::Position(Position(Vector3::new(390500.0, 140000.0, 200.0))),
-    );
-    let query_doc_aabb_l = QueryExpression::Within(
+    ));
+    let query_doc_aabb_l = QueryExpression::Atomic(AtomicExpression::Within(
         Value::Position(Position(Vector3::new(390000.0, 130000.0, 0.0)))
             ..Value::Position(Position(Vector3::new(400000.0, 140000.0, 200.0))),
-    );
-    let query_doc_aabb_xl = QueryExpression::Within(
+    ));
+    let query_doc_aabb_xl = QueryExpression::Atomic(AtomicExpression::Within(
         Value::Position(Position(Vector3::new(389400.0, 124200.0, -94.88)))
             ..Value::Position(Position(Vector3::new(406200.0, 148200.0, 760.03))),
-    );
+    ));
 
-    let query_doc_all_buildings = QueryExpression::Compare((
+    let query_doc_all_buildings = QueryExpression::Atomic(AtomicExpression::Compare((
         CompareExpression::Equals,
         Value::Classification(Classification(6)),
-    ));
+    )));
 
     let query_all_buildings_within_bounds = QueryExpression::And(
         Box::new(query_doc_aabb_l.clone()),

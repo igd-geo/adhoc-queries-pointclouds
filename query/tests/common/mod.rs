@@ -17,6 +17,7 @@ use pasture_io::base::PointReader;
 use pasture_io::las::LASReader;
 use pasture_io::las_rs::{Builder, GpsTimeType};
 use pasture_io::{base::PointWriter, las::LASWriter};
+use query::index::AtomicExpression;
 use query::index::{Classification, Position};
 use query::index::{DatasetID, Query};
 use query::index::{NoRefinementStrategy, Value};
@@ -223,17 +224,17 @@ pub fn setup_query(
         get_matching_points_reference(points, bounds, classification_range.clone());
 
     let bounds_query = bounds.map(|bounds| {
-        Query::Within(
+        Query::Atomic(AtomicExpression::Within(
             Value::Position(Position(bounds.min().coords))
                 ..Value::Position(Position(bounds.max().coords)),
-        )
+        ))
     });
 
     let classification_query = classification_range.map(|classification_range| {
-        Query::Within(
+        Query::Atomic(AtomicExpression::Within(
             Value::Classification(Classification(classification_range.start))
                 ..Value::Classification(Classification(classification_range.end)),
-        )
+        ))
     });
 
     let query = match (bounds_query, classification_query) {

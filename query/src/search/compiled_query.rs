@@ -1,7 +1,7 @@
 use anyhow::{bail, Result};
 
 use crate::{
-    index::{DatasetID, PointRange, QueryExpression, Value},
+    index::{AtomicExpression, DatasetID, PointRange, QueryExpression, Value},
     io::InputLayer,
     stats::BlockQueryRuntimeTracker,
 };
@@ -136,28 +136,31 @@ pub(crate) fn compile_query(
     file_format: &str,
 ) -> Result<CompiledQueryExpression> {
     match query {
-        QueryExpression::Within(within) => match file_format {
-            "las" => match (&within.start, &within.end) {
-                (Value::Classification(min), Value::Classification(max)) => Ok(
-                    CompiledQueryExpression::Atom(Box::new(LasQueryAtomWithin::new(*min, *max))),
-                ),
-                (Value::Position(min), Value::Position(max)) => Ok(CompiledQueryExpression::Atom(
-                    Box::new(LasQueryAtomWithin::new(*min, *max)),
-                )),
-                _ => bail!("Wrong Value types, min and max Value must have the same type!"),
-            },
-            _ => bail!("Unsupported file format {}", file_format),
-        },
-        QueryExpression::Compare((compare_expression, value)) => match file_format {
-            "las" => match value {
-                Value::Classification(classification) => {
-                    Ok(CompiledQueryExpression::Atom(Box::new(
-                        LasQueryAtomCompare::new(*classification, *compare_expression),
-                    )))
+        QueryExpression::Atomic(atomic_expr) => match file_format {
+            "las" => match atomic_expr {
+                AtomicExpression::Within(range) => {
+                    let las_expr: Box<dyn CompiledQueryAtom> = match (range.start, range.end) {
+                        (Value::Classification(min), Value::Classification(max)) => {
+                            Box::new(LasQueryAtomWithin::new(min, max))
+                        }
+                        (Value::Position(min), Value::Position(max)) => {
+                            Box::new(LasQueryAtomWithin::new(min, max))
+                        }
+                        _ => bail!("Wrong Value types, min and max Value must have the same type!"),
+                    };
+                    Ok(CompiledQueryExpression::Atom(las_expr))
                 }
-                Value::Position(position) => Ok(CompiledQueryExpression::Atom(Box::new(
-                    LasQueryAtomCompare::new(*position, *compare_expression),
-                ))),
+                AtomicExpression::Compare((compare_expr, value)) => {
+                    let las_expr: Box<dyn CompiledQueryAtom> = match value {
+                        Value::Position(position) => {
+                            Box::new(LasQueryAtomCompare::new(*position, *compare_expr))
+                        }
+                        Value::Classification(classification) => {
+                            Box::new(LasQueryAtomCompare::new(*classification, *compare_expr))
+                        }
+                    };
+                    Ok(CompiledQueryExpression::Atom(las_expr))
+                }
             },
             _ => bail!("Unsupported file format {}", file_format),
         },

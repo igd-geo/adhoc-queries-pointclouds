@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::io::{open_reader, PointReader};
 
-use super::{CompareExpression, Index, IndexResult, Value, ValueType};
+use super::{AtomicExpression, CompareExpression, Index, IndexResult, Value, ValueType};
 
 // TODO pasture_core does not support serde, maybe implement it?
 
@@ -59,43 +59,41 @@ impl PositionIndex {
         }
         Self { bounds }
     }
+
+    fn within(&self, min_position: &Vector3<f64>, max_position: &Vector3<f64>) -> IndexResult {
+        let other_bounds =
+            AABB::from_min_max_unchecked(Point3::from(*min_position), Point3::from(*max_position));
+        let intersects = self.bounds.intersects(&other_bounds);
+        if !intersects {
+            IndexResult::NoMatch
+        } else {
+            let index_is_fully_contained = min_position.x <= self.bounds.min().x
+                && min_position.y <= self.bounds.min().y
+                && min_position.z <= self.bounds.min().z
+                && max_position.x >= self.bounds.max().x
+                && max_position.y >= self.bounds.max().y
+                && max_position.z >= self.bounds.max().z;
+            if index_is_fully_contained {
+                IndexResult::MatchAll
+            } else {
+                IndexResult::MatchSome
+            }
+        }
+    }
 }
 
 #[typetag::serde]
 impl Index for PositionIndex {
-    fn within(&self, range: &Range<Value>, _num_points_in_block: usize) -> IndexResult {
-        match (&range.start, &range.end) {
-            (Value::Position(min_pos), Value::Position(max_pos)) => {
-                let other_bounds =
-                    AABB::from_min_max_unchecked(Point3::from(min_pos.0), Point3::from(max_pos.0));
-                let intersects = self.bounds.intersects(&other_bounds);
-                if !intersects {
-                    IndexResult::NoMatch
-                } else {
-                    let index_is_fully_contained = min_pos.0.x <= self.bounds.min().x
-                        && min_pos.0.y <= self.bounds.min().y
-                        && min_pos.0.z <= self.bounds.min().z
-                        && max_pos.0.x >= self.bounds.max().x
-                        && max_pos.0.y >= self.bounds.max().y
-                        && max_pos.0.z >= self.bounds.max().z;
-                    if index_is_fully_contained {
-                        IndexResult::MatchAll
-                    } else {
-                        IndexResult::MatchSome
-                    }
+    fn matches(&self, atomic_expr: &AtomicExpression, _num_points_in_block: usize) -> IndexResult {
+        match atomic_expr {
+            AtomicExpression::Within(range) => {
+                match (range.start, range.end) {
+                    (Value::Position(min_pos), Value::Position(max_pos)) => self.within(&min_pos.0, &max_pos.0),
+                    (other_start, other_end) => panic!("Encountered invalid values for range of 'Within' expression. Expected (Position, Position) but got ({},{}) instead", other_start.value_type(), other_end.value_type()),
                 }
-            }
-            _ => panic!("invalid value type"),
+            },
+            other => panic!("Unsupported query expression {other:#?} for PositionIndex"),
         }
-    }
-
-    fn compare(
-        &self,
-        _how: CompareExpression,
-        _data: &Value,
-        _num_points_in_block: usize,
-    ) -> IndexResult {
-        unimplemented!()
     }
 
     fn value_type(&self) -> ValueType {
@@ -154,55 +152,64 @@ impl ClassificationIndex {
                 .sum(),
         }
     }
+
+    fn within_range(
+        &self,
+        min_class: u8,
+        max_class: u8,
+        num_points_in_block: usize,
+    ) -> IndexResult {
+        let matches_within_range: usize = self
+            .histogram
+            .iter()
+            .filter_map(|(key, val)| {
+                if *key < min_class || *key >= max_class {
+                    None
+                } else {
+                    Some(*val)
+                }
+            })
+            .sum();
+        if matches_within_range == 0 {
+            IndexResult::NoMatch
+        } else if matches_within_range == num_points_in_block {
+            IndexResult::MatchAll
+        } else {
+            IndexResult::MatchSome
+        }
+    }
 }
 
 #[typetag::serde]
 impl Index for ClassificationIndex {
-    fn within(&self, range: &Range<Value>, num_points_in_block: usize) -> IndexResult {
-        match (&range.start, &range.end) {
-            (Value::Classification(low), Value::Classification(high)) => {
-                let matches_within_range: usize = self
-                    .histogram
-                    .iter()
-                    .filter_map(|(key, val)| {
-                        if *key < low.0 || *key >= high.0 {
-                            None
-                        } else {
-                            Some(*val)
-                        }
-                    })
-                    .sum();
-                if matches_within_range == 0 {
-                    IndexResult::NoMatch
-                } else if matches_within_range == num_points_in_block {
-                    IndexResult::MatchAll
-                } else {
-                    IndexResult::MatchSome
-                }
-            }
-            _ => panic!("Invalid value type"),
-        }
-    }
-
-    fn compare(
+    fn matches(
         &self,
-        how: CompareExpression,
-        data: &Value,
+        atomic_expression: &AtomicExpression,
         num_points_in_block: usize,
     ) -> IndexResult {
-        match data {
-            Value::Classification(classification) => {
-                let num_matches =
-                    self.get_matches_from_histogram(how, classification.0, num_points_in_block);
-                if num_matches == 0 {
-                    IndexResult::NoMatch
-                } else if num_matches == num_points_in_block {
-                    IndexResult::MatchAll
-                } else {
-                    IndexResult::MatchSome
+        match atomic_expression {
+            AtomicExpression::Compare((compare_expr, value)) => {
+                match value {
+                    Value::Classification(classification) => {
+                        let num_matches =
+                            self.get_matches_from_histogram(*compare_expr, classification.0, num_points_in_block);
+                        if num_matches == 0 {
+                            IndexResult::NoMatch
+                        } else if num_matches == num_points_in_block {
+                            IndexResult::MatchAll
+                        } else {
+                            IndexResult::MatchSome
+                        }
+                    },
+                    other => panic!("Encountered invalid value in 'Compare' expression. Expected Classification but got {} instead", other.value_type()),
+                } 
+            },
+            AtomicExpression::Within(range) => {
+                match (range.start, range.end) {
+                    (Value::Classification(min_class), Value::Classification(max_class)) => self.within_range(min_class.0, max_class.0, num_points_in_block),
+                    (other_min, other_max) => panic!("Encountered invalid values for range of 'Within' expression. Expected (Classification, Classification) but got ({},{}) instead", other_min.value_type(), other_max.value_type()),
                 }
-            }
-            _ => panic!("Invalid value type"),
+            },
         }
     }
 

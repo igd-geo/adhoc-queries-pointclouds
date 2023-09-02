@@ -77,11 +77,9 @@ impl IndexResult {
 
 #[typetag::serde(tag = "type")]
 pub trait Index: Send + Sync {
-    fn within(&self, range: &Range<Value>, num_points_in_block: usize) -> IndexResult;
-    fn compare(
+    fn matches(
         &self,
-        how: CompareExpression,
-        data: &Value,
+        atomic_expression: &AtomicExpression,
         num_points_in_block: usize,
     ) -> IndexResult;
     fn value_type(&self) -> ValueType;
@@ -457,9 +455,23 @@ pub enum CompareExpression {
 }
 
 #[derive(Clone, Debug)]
-pub enum QueryExpression {
+pub enum AtomicExpression {
     Within(Range<Value>),
     Compare((CompareExpression, Value)),
+}
+
+impl AtomicExpression {
+    pub(crate) fn value_type(&self) -> ValueType {
+        match self {
+            AtomicExpression::Within(range) => range.start.value_type(),
+            AtomicExpression::Compare((_, value)) => value.value_type(),
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum QueryExpression {
+    Atomic(AtomicExpression),
     And(Box<QueryExpression>, Box<QueryExpression>),
     Or(Box<QueryExpression>, Box<QueryExpression>),
 }
@@ -467,20 +479,11 @@ pub enum QueryExpression {
 impl QueryExpression {
     pub fn eval(&self, indices: &FxHashMap<ValueType, BlockIndex>) -> BlockQueryResult {
         match self {
-            QueryExpression::Within(range) => {
-                if let Some(index) = indices.get(&range.start.value_type()) {
-                    query_index(index, range.start.value_type(), |index, block| {
-                        index.within(range, block.len())
-                    })
-                } else {
-                    panic!("No index found for value type");
-                }
-            }
-            QueryExpression::Compare((compare_expression, value)) => {
-                let value_type = value.value_type();
+            QueryExpression::Atomic(atomic_expr) => {
+                let value_type = atomic_expr.value_type();
                 if let Some(index) = indices.get(&value_type) {
                     query_index(index, value_type, |index, block| {
-                        index.compare(*compare_expression, value, block.len())
+                        index.matches(atomic_expr, block.len())
                     })
                 } else {
                     panic!("No index found for value type");
@@ -501,14 +504,9 @@ impl QueryExpression {
 
     pub fn required_indices(&self) -> FxHashSet<ValueType> {
         match self {
-            QueryExpression::Within(range) => {
+            QueryExpression::Atomic(atomic_expr) => {
                 let mut indices: FxHashSet<_> = Default::default();
-                indices.insert(range.start.value_type());
-                indices
-            }
-            QueryExpression::Compare((_, value)) => {
-                let mut indices: FxHashSet<_> = Default::default();
-                indices.insert(value.value_type());
+                indices.insert(atomic_expr.value_type());
                 indices
             }
             QueryExpression::And(l, r) => {
@@ -577,10 +575,10 @@ mod tests {
     fn test_simple_queries() {
         let indices = create_default_indices();
 
-        let query1 = QueryExpression::Within(
+        let query1 = QueryExpression::Atomic(AtomicExpression::Within(
             Value::Position(Position(Vector3::new(0.5, 0.5, 0.5)))
                 ..Value::Position(Position(Vector3::new(1.5, 1.5, 1.5))),
-        );
+        ));
 
         let query1_results = query1.eval(&indices);
         let expected_query1_results = vec![
@@ -589,10 +587,10 @@ mod tests {
         ];
         assert_eq!(expected_query1_results, query1_results.matching_blocks);
 
-        let query2 = QueryExpression::Within(
+        let query2 = QueryExpression::Atomic(AtomicExpression::Within(
             Value::Position(Position(Vector3::new(0.0, 0.0, 0.0)))
                 ..Value::Position(Position(Vector3::new(4.0, 4.0, 4.0))),
-        );
+        ));
         let query2_results = query2.eval(&indices);
         let expected_query2_results = vec![
             (PointRange::new(0, 0..1000), IndexResult::MatchAll),
@@ -601,10 +599,10 @@ mod tests {
         ];
         assert_eq!(expected_query2_results, query2_results.matching_blocks);
 
-        let query3 = QueryExpression::Compare((
+        let query3 = QueryExpression::Atomic(AtomicExpression::Compare((
             CompareExpression::Equals,
             Value::Classification(Classification(0)),
-        ));
+        )));
         let query3_results = query3.eval(&indices);
         let expected_query3_results = vec![
             (PointRange::new(0, 0..1500), IndexResult::MatchSome),
@@ -612,17 +610,17 @@ mod tests {
         ];
         assert_eq!(expected_query3_results, query3_results.matching_blocks);
 
-        let query4 = QueryExpression::Compare((
+        let query4 = QueryExpression::Atomic(AtomicExpression::Compare((
             CompareExpression::Equals,
             Value::Classification(Classification(1)),
-        ));
+        )));
         let query4_results = query4.eval(&indices);
         let expected_query4_results = vec![(PointRange::new(0, 0..1500), IndexResult::MatchSome)];
         assert_eq!(expected_query4_results, query4_results.matching_blocks);
 
-        let query5 = QueryExpression::Within(
+        let query5 = QueryExpression::Atomic(AtomicExpression::Within(
             Value::Classification(Classification(1))..Value::Classification(Classification(3)),
-        );
+        ));
         let query5_results = query5.eval(&indices);
         let expected_query5_results = vec![
             (PointRange::new(0, 0..1500), IndexResult::MatchSome),
@@ -636,14 +634,14 @@ mod tests {
         let indices = create_default_indices();
 
         let query1 = QueryExpression::And(
-            Box::new(QueryExpression::Within(
+            Box::new(QueryExpression::Atomic(AtomicExpression::Within(
                 Value::Position(Position(Vector3::new(0.0, 0.0, 0.0)))
                     ..Value::Position(Position(Vector3::new(4.0, 4.0, 4.0))),
-            )),
-            Box::new(QueryExpression::Compare((
+            ))),
+            Box::new(QueryExpression::Atomic(AtomicExpression::Compare((
                 CompareExpression::Equals,
                 Value::Classification(Classification(1)),
-            ))),
+            )))),
         );
 
         let query1_results = query1.eval(&indices);
@@ -654,14 +652,14 @@ mod tests {
         assert_eq!(expected_query1_results, query1_results.matching_blocks);
 
         let query2 = QueryExpression::And(
-            Box::new(QueryExpression::Within(
+            Box::new(QueryExpression::Atomic(AtomicExpression::Within(
                 Value::Position(Position(Vector3::new(0.0, 0.0, 0.0)))
                     ..Value::Position(Position(Vector3::new(4.0, 4.0, 4.0))),
-            )),
-            Box::new(QueryExpression::Compare((
+            ))),
+            Box::new(QueryExpression::Atomic(AtomicExpression::Compare((
                 CompareExpression::Equals,
                 Value::Classification(Classification(2)),
-            ))),
+            )))),
         );
 
         let query2_results = query2.eval(&indices);
@@ -669,14 +667,14 @@ mod tests {
         assert_eq!(expected_query2_results, query2_results.matching_blocks);
 
         let query3 = QueryExpression::Or(
-            Box::new(QueryExpression::Within(
+            Box::new(QueryExpression::Atomic(AtomicExpression::Within(
                 Value::Position(Position(Vector3::new(-2.0, -2.0, -2.0)))
                     ..Value::Position(Position(Vector3::new(-1.0, -1.0, -1.0))),
-            )),
-            Box::new(QueryExpression::Compare((
+            ))),
+            Box::new(QueryExpression::Atomic(AtomicExpression::Compare((
                 CompareExpression::Equals,
                 Value::Classification(Classification(0)),
-            ))),
+            )))),
         );
 
         let query3_results = query3.eval(&indices);
