@@ -1,15 +1,13 @@
-use std::{
-    path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-};
+use std::path::{Path, PathBuf};
 
 use anyhow::Result;
 use pasture_core::nalgebra::Vector3;
 use query::{
-    collect_points::{BufferCollector, CountCollector, ResultCollector},
     index::{
-        Classification, NoRefinementStrategy, Position, ProgressiveIndex, QueryExpression, Value,
+        Classification, CompareExpression, NoRefinementStrategy, Position, ProgressiveIndex,
+        QueryExpression, Value,
     },
+    io::NullOutput,
 };
 use walkdir::WalkDir;
 
@@ -48,7 +46,10 @@ fn main() -> Result<()> {
             ..Value::Position(Position(Vector3::new(406200.0, 148200.0, 760.03))),
     );
 
-    let query_doc_all_buildings = QueryExpression::Equals(Value::Classification(Classification(6)));
+    let query_doc_all_buildings = QueryExpression::Compare((
+        CompareExpression::Equals,
+        Value::Classification(Classification(6)),
+    ));
 
     let query_all_buildings_within_bounds = QueryExpression::And(
         Box::new(query_doc_aabb_l.clone()),
@@ -67,15 +68,15 @@ fn main() -> Result<()> {
     let mut progressive_index = ProgressiveIndex::new();
     let dataset_id = progressive_index.add_dataset(paths.as_slice())?;
 
-    let result_collector = Arc::new(Mutex::new(CountCollector::new()));
+    let output = NullOutput::default();
     let stats = progressive_index.query(
         dataset_id,
         query_doc_all_buildings,
         &NoRefinementStrategy,
-        result_collector.clone(),
+        &output,
     )?;
 
-    println!("{}", stats);
+    eprintln!("{}", stats);
 
     Ok(())
 }

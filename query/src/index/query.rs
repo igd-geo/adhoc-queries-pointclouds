@@ -78,7 +78,12 @@ impl IndexResult {
 #[typetag::serde(tag = "type")]
 pub trait Index: Send + Sync {
     fn within(&self, range: &Range<Value>, num_points_in_block: usize) -> IndexResult;
-    fn equals(&self, data: &Value, num_points_in_block: usize) -> IndexResult;
+    fn compare(
+        &self,
+        how: CompareExpression,
+        data: &Value,
+        num_points_in_block: usize,
+    ) -> IndexResult;
     fn value_type(&self) -> ValueType;
 }
 
@@ -226,7 +231,7 @@ fn or_blocks_within_file<
         if combined.is_empty() {
             combined.push(new_block);
         } else {
-            let mut prev_block = combined.last_mut().unwrap();
+            let prev_block = combined.last_mut().unwrap();
             if prev_block.0.points_in_file.end == new_block.0.points_in_file.start
                 && prev_block.1 == new_block.1
             {
@@ -441,10 +446,20 @@ fn query_index(
     }
 }
 
+#[derive(Copy, Clone, Debug)]
+pub enum CompareExpression {
+    Equals,
+    NotEquals,
+    LessThan,
+    LessThanOrEquals,
+    GreaterThan,
+    GreaterThanOrEquals,
+}
+
 #[derive(Clone, Debug)]
 pub enum QueryExpression {
     Within(Range<Value>),
-    Equals(Value),
+    Compare((CompareExpression, Value)),
     And(Box<QueryExpression>, Box<QueryExpression>),
     Or(Box<QueryExpression>, Box<QueryExpression>),
 }
@@ -461,10 +476,11 @@ impl QueryExpression {
                     panic!("No index found for value type");
                 }
             }
-            QueryExpression::Equals(value) => {
-                if let Some(index) = indices.get(&value.value_type()) {
-                    query_index(index, value.value_type(), |index, block| {
-                        index.equals(value, block.len())
+            QueryExpression::Compare((compare_expression, value)) => {
+                let value_type = value.value_type();
+                if let Some(index) = indices.get(&value_type) {
+                    query_index(index, value_type, |index, block| {
+                        index.compare(*compare_expression, value, block.len())
                     })
                 } else {
                     panic!("No index found for value type");
@@ -490,7 +506,7 @@ impl QueryExpression {
                 indices.insert(range.start.value_type());
                 indices
             }
-            QueryExpression::Equals(value) => {
+            QueryExpression::Compare((_, value)) => {
                 let mut indices: FxHashSet<_> = Default::default();
                 indices.insert(value.value_type());
                 indices
@@ -585,7 +601,10 @@ mod tests {
         ];
         assert_eq!(expected_query2_results, query2_results.matching_blocks);
 
-        let query3 = QueryExpression::Equals(Value::Classification(Classification(0)));
+        let query3 = QueryExpression::Compare((
+            CompareExpression::Equals,
+            Value::Classification(Classification(0)),
+        ));
         let query3_results = query3.eval(&indices);
         let expected_query3_results = vec![
             (PointRange::new(0, 0..1500), IndexResult::MatchSome),
@@ -593,7 +612,10 @@ mod tests {
         ];
         assert_eq!(expected_query3_results, query3_results.matching_blocks);
 
-        let query4 = QueryExpression::Equals(Value::Classification(Classification(1)));
+        let query4 = QueryExpression::Compare((
+            CompareExpression::Equals,
+            Value::Classification(Classification(1)),
+        ));
         let query4_results = query4.eval(&indices);
         let expected_query4_results = vec![(PointRange::new(0, 0..1500), IndexResult::MatchSome)];
         assert_eq!(expected_query4_results, query4_results.matching_blocks);
@@ -618,8 +640,9 @@ mod tests {
                 Value::Position(Position(Vector3::new(0.0, 0.0, 0.0)))
                     ..Value::Position(Position(Vector3::new(4.0, 4.0, 4.0))),
             )),
-            Box::new(QueryExpression::Equals(Value::Classification(
-                Classification(1),
+            Box::new(QueryExpression::Compare((
+                CompareExpression::Equals,
+                Value::Classification(Classification(1)),
             ))),
         );
 
@@ -635,8 +658,9 @@ mod tests {
                 Value::Position(Position(Vector3::new(0.0, 0.0, 0.0)))
                     ..Value::Position(Position(Vector3::new(4.0, 4.0, 4.0))),
             )),
-            Box::new(QueryExpression::Equals(Value::Classification(
-                Classification(2),
+            Box::new(QueryExpression::Compare((
+                CompareExpression::Equals,
+                Value::Classification(Classification(2)),
             ))),
         );
 
@@ -649,8 +673,9 @@ mod tests {
                 Value::Position(Position(Vector3::new(-2.0, -2.0, -2.0)))
                     ..Value::Position(Position(Vector3::new(-1.0, -1.0, -1.0))),
             )),
-            Box::new(QueryExpression::Equals(Value::Classification(
-                Classification(0),
+            Box::new(QueryExpression::Compare((
+                CompareExpression::Equals,
+                Value::Classification(Classification(0)),
             ))),
         );
 

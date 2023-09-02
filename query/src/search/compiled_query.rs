@@ -1,40 +1,25 @@
-use std::io::Cursor;
-
 use anyhow::{bail, Result};
-use pasture_io::las_rs::raw::Header;
 
 use crate::{
-    collect_points::PointBufferSend,
-    index::{PointRange, QueryExpression, Value},
+    index::{DatasetID, PointRange, QueryExpression, Value},
+    io::InputLayer,
     stats::BlockQueryRuntimeTracker,
 };
 
-use super::{LasQueryAtomEquals, LasQueryAtomWithin};
+use super::{LasQueryAtomCompare, LasQueryAtomWithin};
 
 /// A single piece of a query compiled into an optimized format so that we can pass it the raw memory of a file (LAS, LAZ, LAST, etc.)
 /// together with the file header. Evaluating a query atom sets all matching indices in `matching_indices` to true
 pub trait CompiledQueryAtom: Sync + Send {
     fn eval(
         &self,
-        file: &mut Cursor<&[u8]>,
-        file_header: &Header,
+        input_layer: &InputLayer,
         block: PointRange,
+        dataset_id: DatasetID,
         matching_indices: &'_ mut [bool],
         which_indices_to_loop_over: WhichIndicesToLoopOver,
         runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<usize>;
-}
-
-pub trait Extractor {
-    fn extract_data(
-        &self,
-        file: &mut Cursor<&[u8]>,
-        file_header: &Header,
-        block: PointRange,
-        matching_indices: &[bool],
-        num_matches: usize,
-        runtime_tracker: &BlockQueryRuntimeTracker,
-    ) -> Result<Box<dyn PointBufferSend>>;
 }
 
 /// Evaluating a query atom calculates matching indices. In the base case, we iterate over `block`, which is a range describing the point indices
@@ -57,9 +42,9 @@ pub enum CompiledQueryExpression {
 impl CompiledQueryExpression {
     pub fn eval<'a>(
         &self,
-        file: &mut Cursor<&[u8]>,
-        file_header: &Header,
+        input_layer: &InputLayer,
         block: PointRange,
+        dataset_id: DatasetID,
         matching_indices: &'a mut [bool],
         num_matches: usize,
         which_indices: WhichIndicesToLoopOver,
@@ -67,18 +52,18 @@ impl CompiledQueryExpression {
     ) -> Result<usize> {
         match self {
             CompiledQueryExpression::Atom(atom) => atom.eval(
-                file,
-                file_header,
+                input_layer,
                 block,
+                dataset_id,
                 matching_indices,
                 which_indices,
                 runtime_tracker,
             ),
             CompiledQueryExpression::And(left, right) => {
                 let num_matches_left = left.eval(
-                    file,
-                    file_header,
+                    input_layer,
                     block.clone(),
+                    dataset_id,
                     matching_indices,
                     num_matches,
                     which_indices,
@@ -86,9 +71,9 @@ impl CompiledQueryExpression {
                 )?;
                 // second expression doesn't have to consider indices which are already false
                 right.eval(
-                    file,
-                    file_header,
+                    input_layer,
                     block,
+                    dataset_id,
                     matching_indices,
                     num_matches_left,
                     WhichIndicesToLoopOver::Matching,
@@ -97,9 +82,9 @@ impl CompiledQueryExpression {
             }
             CompiledQueryExpression::Or(left, right) => {
                 let num_matches_left = left.eval(
-                    file,
-                    file_header,
+                    input_layer,
                     block.clone(),
+                    dataset_id,
                     matching_indices,
                     num_matches,
                     which_indices,
@@ -107,9 +92,9 @@ impl CompiledQueryExpression {
                 )?;
                 // second expression doesn't have to consider indices which are already true
                 right.eval(
-                    file,
-                    file_header,
+                    input_layer,
                     block,
+                    dataset_id,
                     matching_indices,
                     num_matches_left,
                     WhichIndicesToLoopOver::NotMatching,
@@ -163,13 +148,15 @@ pub(crate) fn compile_query(
             },
             _ => bail!("Unsupported file format {}", file_format),
         },
-        QueryExpression::Equals(equals) => match file_format {
-            "las" => match equals {
-                Value::Classification(classification) => Ok(CompiledQueryExpression::Atom(
-                    Box::new(LasQueryAtomEquals::new(*classification)),
-                )),
+        QueryExpression::Compare((compare_expression, value)) => match file_format {
+            "las" => match value {
+                Value::Classification(classification) => {
+                    Ok(CompiledQueryExpression::Atom(Box::new(
+                        LasQueryAtomCompare::new(*classification, *compare_expression),
+                    )))
+                }
                 Value::Position(position) => Ok(CompiledQueryExpression::Atom(Box::new(
-                    LasQueryAtomEquals::new(*position),
+                    LasQueryAtomCompare::new(*position, *compare_expression),
                 ))),
             },
             _ => bail!("Unsupported file format {}", file_format),

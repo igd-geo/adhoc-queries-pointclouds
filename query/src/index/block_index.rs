@@ -12,7 +12,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::io::{open_reader, PointReader};
 
-use super::{Index, IndexResult, Value, ValueType};
+use super::{CompareExpression, Index, IndexResult, Value, ValueType};
 
 // TODO pasture_core does not support serde, maybe implement it?
 
@@ -89,7 +89,12 @@ impl Index for PositionIndex {
         }
     }
 
-    fn equals(&self, _data: &Value, _num_points_in_block: usize) -> IndexResult {
+    fn compare(
+        &self,
+        _how: CompareExpression,
+        _data: &Value,
+        _num_points_in_block: usize,
+    ) -> IndexResult {
         unimplemented!()
     }
 
@@ -123,6 +128,32 @@ impl ClassificationIndex {
         }
         Self { histogram }
     }
+
+    fn get_matches_from_histogram(
+        &self,
+        comparator: CompareExpression,
+        classification: u8,
+        num_points_in_block: usize,
+    ) -> usize {
+        match comparator {
+            CompareExpression::Equals => *self.histogram.get(&classification).unwrap_or(&0),
+            CompareExpression::NotEquals => {
+                num_points_in_block - *self.histogram.get(&classification).unwrap_or(&0)
+            }
+            CompareExpression::LessThan => (0..classification)
+                .map(|c| *self.histogram.get(&c).unwrap_or(&0))
+                .sum(),
+            CompareExpression::LessThanOrEquals => (0..=classification)
+                .map(|c| *self.histogram.get(&c).unwrap_or(&0))
+                .sum(),
+            CompareExpression::GreaterThan => ((classification + 1)..std::u8::MAX)
+                .map(|c| *self.histogram.get(&c).unwrap_or(&0))
+                .sum(),
+            CompareExpression::GreaterThanOrEquals => (classification..std::u8::MAX)
+                .map(|c| *self.histogram.get(&c).unwrap_or(&0))
+                .sum(),
+        }
+    }
 }
 
 #[typetag::serde]
@@ -153,10 +184,16 @@ impl Index for ClassificationIndex {
         }
     }
 
-    fn equals(&self, data: &Value, num_points_in_block: usize) -> IndexResult {
+    fn compare(
+        &self,
+        how: CompareExpression,
+        data: &Value,
+        num_points_in_block: usize,
+    ) -> IndexResult {
         match data {
             Value::Classification(classification) => {
-                let num_matches = *self.histogram.get(&classification.0).unwrap_or(&0);
+                let num_matches =
+                    self.get_matches_from_histogram(how, classification.0, num_points_in_block);
                 if num_matches == 0 {
                     IndexResult::NoMatch
                 } else if num_matches == num_points_in_block {

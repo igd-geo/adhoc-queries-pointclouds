@@ -1,12 +1,13 @@
-use std::sync::{Arc, Mutex};
 use std::{cmp::min, ops::Range, path::Path};
 
 use anyhow::Context;
 use anyhow::Result;
-use pasture_core::containers::PointBufferExt;
+use pasture_core::containers::{
+    BorrowedBuffer, BorrowedMutBuffer, InterleavedBuffer, MakeBufferFromLayout, OwningBuffer,
+    VectorBuffer,
+};
 use pasture_core::layout::attributes::{CLASSIFICATION, GPS_TIME, POSITION_3D};
 use pasture_core::{
-    containers::{InterleavedPointBufferExt, InterleavedVecPointStorage, PointBuffer},
     layout::PointType,
     math::AABB,
     nalgebra::{Point3, Vector3},
@@ -16,14 +17,14 @@ use pasture_io::base::PointReader;
 use pasture_io::las::LASReader;
 use pasture_io::las_rs::{Builder, GpsTimeType};
 use pasture_io::{base::PointWriter, las::LASWriter};
-use query::collect_points::BufferCollector;
 use query::index::{Classification, Position};
 use query::index::{DatasetID, Query};
 use query::index::{NoRefinementStrategy, Value};
+use query::io::InMemoryOutput;
 use query::{self, index::ProgressiveIndex};
 use rand::{thread_rng, Rng};
 
-#[derive(PointType, Debug, Copy, Clone)]
+#[derive(PointType, Debug, Copy, Clone, bytemuck::AnyBitPattern, bytemuck::NoUninit)]
 #[repr(C, packed)]
 pub struct Point {
     #[pasture(BUILTIN_POSITION_3D)]
@@ -39,12 +40,12 @@ pub const CLASSIFICATION_RANGE: Range<u8> = 0..4;
 pub const POSITION_RANGE: Range<i32> = 0..1024;
 
 /// Generate `count` random points
-pub fn gen_random_points(count: usize) -> InterleavedVecPointStorage {
-    let mut buffer = InterleavedVecPointStorage::with_capacity(count, Point::layout());
+pub fn gen_random_points(count: usize) -> VectorBuffer {
+    let mut buffer = VectorBuffer::with_capacity(count, Point::layout());
     let mut rng = thread_rng();
 
     for id in 0..count {
-        buffer.push_point(Point {
+        buffer.view_mut().push_point(Point {
             classification: rng.gen_range(CLASSIFICATION_RANGE),
             id: id as f64,
             position: Vector3::new(
@@ -60,10 +61,7 @@ pub fn gen_random_points(count: usize) -> InterleavedVecPointStorage {
 }
 
 /// Splits the given points into chunks
-pub fn split_into_chunks(
-    points: InterleavedVecPointStorage,
-    num_chunks: usize,
-) -> Vec<InterleavedVecPointStorage> {
+pub fn split_into_chunks(points: VectorBuffer, num_chunks: usize) -> Vec<VectorBuffer> {
     let mut ret = vec![];
 
     let points_per_chunk = (points.len() + num_chunks - 1) / num_chunks;
@@ -71,11 +69,12 @@ pub fn split_into_chunks(
         let chunk_start = chunk * points_per_chunk;
         let chunk_end = min((chunk + 1) * points_per_chunk, points.len());
 
-        let mut chunk_buffer = InterleavedVecPointStorage::with_capacity(
-            chunk_end - chunk_start,
-            points.point_layout().clone(),
-        );
-        chunk_buffer.push_points(points.get_points_ref::<Point>(chunk_start..chunk_end));
+        let mut chunk_buffer =
+            VectorBuffer::with_capacity(chunk_end - chunk_start, points.point_layout().clone());
+        // Safe because buffers share the same PointLayout
+        unsafe {
+            chunk_buffer.push_points(points.get_point_range_ref(chunk_start..chunk_end));
+        }
         ret.push(chunk_buffer);
     }
 
@@ -84,10 +83,7 @@ pub fn split_into_chunks(
 
 /// Writes the given point data into a LAS file and returns the data from that LAS file after reading. This is done
 /// to make sure that the PointLayout of the query result matches the PointLayout of the reference data
-pub fn write_as_las(
-    points: &InterleavedVecPointStorage,
-    path: &Path,
-) -> Result<InterleavedVecPointStorage> {
+pub fn write_as_las(points: &VectorBuffer, path: &Path) -> Result<VectorBuffer> {
     let mut las_header_builder = Builder::from((1, 4));
     las_header_builder.point_format.has_gps_time = true;
     las_header_builder.gps_time_type = GpsTimeType::Standard;
@@ -108,8 +104,7 @@ pub fn write_as_las(
     }
 
     let mut reader = LASReader::from_path(path).context("Can't open LAS file")?;
-    let mut ret =
-        InterleavedVecPointStorage::with_capacity(points.len(), points.point_layout().clone());
+    let mut ret = VectorBuffer::with_capacity(points.len(), points.point_layout().clone());
     reader
         .read_into(&mut ret, points.len())
         .context("Error while reading points from LAS file")?;
@@ -119,12 +114,12 @@ pub fn write_as_las(
 /// Reference implementation for a point query. This is used to compare the progressive indexer query implementation
 /// to a correct baseline
 pub fn get_matching_points_reference(
-    points: &InterleavedVecPointStorage,
+    points: &VectorBuffer,
     bounds: Option<AABB<f64>>,
     classification_range: Option<Range<u8>>,
-) -> InterleavedVecPointStorage {
-    let mut ret = InterleavedVecPointStorage::new(points.point_layout().clone());
-    for point in points.iter_point_ref::<Point>() {
+) -> VectorBuffer {
+    let mut ret = VectorBuffer::new_from_layout(points.point_layout().clone());
+    for point in points.view::<Point>().iter() {
         if let Some(ref bounds) = bounds {
             let pos = point.position;
             if !bounds.contains(&Point3::new(pos[0], pos[1], pos[2])) {
@@ -138,20 +133,20 @@ pub fn get_matching_points_reference(
             }
         }
 
-        ret.push_point(*point);
+        ret.view_mut().push_point(*point);
     }
 
     ret
 }
 
 /// Converts the data in `points` into the `Point` type
-pub fn convert_to_point_type(points: &InterleavedVecPointStorage) -> InterleavedVecPointStorage {
-    let mut ret = InterleavedVecPointStorage::with_capacity(points.len(), Point::layout());
+pub fn convert_to_point_type(points: &VectorBuffer) -> VectorBuffer {
+    let mut ret = VectorBuffer::with_capacity(points.len(), Point::layout());
     for idx in 0..points.len() {
-        let position = points.get_attribute::<Vector3<f64>>(&POSITION_3D, idx);
-        let classification = points.get_attribute::<u8>(&CLASSIFICATION, idx);
-        let id = points.get_attribute::<f64>(&GPS_TIME, idx);
-        ret.push_point(Point {
+        let position = points.view_attribute::<Vector3<f64>>(&POSITION_3D).at(idx);
+        let classification = points.view_attribute::<u8>(&CLASSIFICATION).at(idx);
+        let id = points.view_attribute::<f64>(&GPS_TIME).at(idx);
+        ret.view_mut().push_point(Point {
             classification,
             id,
             position,
@@ -162,22 +157,15 @@ pub fn convert_to_point_type(points: &InterleavedVecPointStorage) -> Interleaved
 }
 
 /// Extract the points from the given collector, sort them by their PointID and return them as a buffer
-pub fn get_sorted_points_from_collector(
-    collector: Arc<Mutex<BufferCollector>>,
-) -> InterleavedVecPointStorage {
-    let collector = Arc::try_unwrap(collector)
-        .ok()
-        .expect("Can't take ownership of result collector")
-        .into_inner()
-        .expect("Mutex was poisoned");
+pub fn get_sorted_points_from_collector(collector: InMemoryOutput) -> VectorBuffer {
     let combined_data = collector
-        .as_single_buffer()
+        .into_single_buffer()
         .expect("Query returned no data");
 
     let mut combined_data = convert_to_point_type(&combined_data);
 
     // Sort ascending by point ID
-    combined_data.sort_by(|a: &Point, b: &Point| {
+    combined_data.view_mut().sort_by(|a: &Point, b: &Point| {
         let a_id = a.id;
         let b_id = b.id;
         a_id.total_cmp(&b_id)
@@ -188,14 +176,12 @@ pub fn get_sorted_points_from_collector(
 
 /// Asserts that the given set of points match. Assumes that both buffers are sorted in ascending order based
 /// on the .id field
-pub fn assert_points_match(
-    expected: &InterleavedVecPointStorage,
-    actual: &InterleavedVecPointStorage,
-) {
+pub fn assert_points_match(expected: &VectorBuffer, actual: &VectorBuffer) {
     // assert_eq!(expected.len(), actual.len());
     for (expected_point, actual_point) in expected
-        .iter_point_ref::<Point>()
-        .zip(actual.iter_point_ref::<Point>())
+        .view::<Point>()
+        .into_iter()
+        .zip(actual.view::<Point>().into_iter())
     {
         let expected_id = expected_point.id;
         let actual_id = actual_point.id;
@@ -208,7 +194,7 @@ pub fn assert_points_match(
 
     if expected.len() != actual.len() {
         if expected.len() < actual.len() {
-            let unexpected_point = actual.get_point::<Point>(expected.len());
+            let unexpected_point = actual.view::<Point>().at(expected.len());
             assert!(
                 false,
                 "Query result has unexpected point {:#?} at index {}",
@@ -216,7 +202,7 @@ pub fn assert_points_match(
                 expected.len()
             );
         } else {
-            let missing_point = expected.get_point::<Point>(actual.len());
+            let missing_point = expected.view::<Point>().at(actual.len());
             assert!(
                 false,
                 "Query result has missing point {:#?} at index {}",
@@ -229,10 +215,10 @@ pub fn assert_points_match(
 
 /// Shorthand for creating a Query object AND returning the expected points based on this query
 pub fn setup_query(
-    points: &InterleavedVecPointStorage,
+    points: &VectorBuffer,
     bounds: Option<AABB<f64>>,
     classification_range: Option<Range<u8>>,
-) -> (InterleavedVecPointStorage, Query) {
+) -> (VectorBuffer, Query) {
     let expected_result =
         get_matching_points_reference(points, bounds, classification_range.clone());
 
@@ -265,25 +251,20 @@ pub fn run_query_and_sort_result(
     query: Query,
     indexer: &mut ProgressiveIndex,
     dataset_id: DatasetID,
-) -> Result<InterleavedVecPointStorage> {
-    let collector = Arc::new(Mutex::new(BufferCollector::new()));
+) -> Result<VectorBuffer> {
+    let output = InMemoryOutput::default();
     indexer
-        .query(dataset_id, query, &NoRefinementStrategy, collector.clone())
+        .query(dataset_id, query, &NoRefinementStrategy, &output)
         .context("Query failed")?;
 
-    let collector = Arc::try_unwrap(collector)
-        .ok()
-        .expect("Can't take ownership of result collector")
-        .into_inner()
-        .expect("Mutex was poisoned");
-    let combined_data = collector
-        .as_single_buffer()
+    let combined_data = output
+        .into_single_buffer()
         .context("Query returned no data")?;
 
     let mut combined_data = convert_to_point_type(&combined_data);
 
     // Sort ascending by point ID
-    combined_data.sort_by(|a: &Point, b: &Point| {
+    combined_data.view_mut().sort_by(|a: &Point, b: &Point| {
         let a_id = a.id;
         let b_id = b.id;
         a_id.total_cmp(&b_id)

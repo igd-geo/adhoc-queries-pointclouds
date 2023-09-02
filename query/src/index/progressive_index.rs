@@ -17,8 +17,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use log::info;
-use memmap::Mmap;
-use pasture_io::{base::IOFactory, las_rs::raw};
+use pasture_io::base::{GenericPointReader, PointReader};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
@@ -26,12 +25,9 @@ use std::{
     collections::HashMap,
     ffi::OsStr,
     fs::File,
-    io::{BufWriter, Cursor},
+    io::BufWriter,
     path::{Path, PathBuf},
-    sync::{
-        atomic::{AtomicUsize, Ordering},
-        Arc, Mutex,
-    },
+    sync::atomic::{AtomicUsize, Ordering},
     time::Instant,
 };
 
@@ -39,8 +35,8 @@ use super::{
     Block, BlockIndex, IndexResult, PointRange, PositionIndex, Query, RefinementStrategy, ValueType,
 };
 use crate::{
-    collect_points::ResultCollector,
-    search::{compile_query, Extractor, LASExtractor, WhichIndicesToLoopOver},
+    io::{InputLayer, PointOutput},
+    search::{compile_query, WhichIndicesToLoopOver},
     stats::{BlockQueryRuntimeTracker, QueryStats},
 };
 
@@ -109,17 +105,22 @@ pub type DatasetID = usize;
 
 pub struct ProgressiveIndex {
     datasets: HashMap<DatasetID, KnownDataset>,
+    input_layer: InputLayer,
 }
 
 impl ProgressiveIndex {
     pub fn new() -> Self {
         Self {
             datasets: HashMap::new(),
+            input_layer: Default::default(),
         }
     }
 
     pub fn with_datasets(datasets: HashMap<DatasetID, KnownDataset>) -> Self {
-        Self { datasets }
+        Self {
+            datasets,
+            input_layer: Default::default(),
+        }
     }
 
     /// Adds a new dataset to the ProgressiveIndex. A dataset is modeled as a set of files, for which the ProgressiveIndex
@@ -140,6 +141,9 @@ impl ProgressiveIndex {
                 common_file_extension,
             },
         );
+        self.input_layer
+            .add_files(files, id)
+            .context("Failed to add files to input layer")?;
         Ok(id)
     }
 
@@ -150,7 +154,7 @@ impl ProgressiveIndex {
         dataset_id: DatasetID,
         query: Query,
         refinement_strategy: &dyn RefinementStrategy,
-        result_collector: Arc<Mutex<dyn ResultCollector>>,
+        data_output: &impl PointOutput,
     ) -> Result<QueryStats> {
         info!("Querying dataset {}", dataset_id);
         let timer = Instant::now();
@@ -162,13 +166,13 @@ impl ProgressiveIndex {
                 "Can't compile query for file format {}",
                 dataset.common_file_extension
             ))?;
-        let data_extractor = match dataset.common_file_extension.as_str() {
-            "las" => LASExtractor {},
-            _ => bail!(
-                "Unsupported file extension {}",
-                &dataset.common_file_extension
-            ),
-        };
+        // let data_extractor = match dataset.common_file_extension.as_str() {
+        //     "las" => LASExtractor {},
+        //     _ => bail!(
+        //         "Unsupported file extension {}",
+        //         &dataset.common_file_extension
+        //     ),
+        // };
 
         // Query with index to get matching blocks, group the blocks by their file
         let rough_query_result = dataset.rough_query(&query);
@@ -189,24 +193,14 @@ impl ProgressiveIndex {
         rough_query_result
             .matching_blocks
             .into_par_iter()
-            .map(|(file_id, blocks)| -> Result<()> {
-                let path = dataset.files[file_id].as_path();
-
-                // TODO This is LAS-specific, extract this
-                let file = File::open(path).context("Can't open file")?;
-                let file_mmap = unsafe { Mmap::map(&file).context("Can't mmap file")? };
-                let file_data: &[u8] = &file_mmap;
-
-                let raw_header = raw::Header::read_from(&mut Cursor::new(file_data))
-                    .context("Can't read LAS header")?;
-
+            .map(|(_, blocks)| -> Result<()> {
                 blocks
                     .into_par_iter()
                     .map_with(
                         all_matching_indices.clone(),
                         |all_matching_indices, (point_range, index_result)| -> Result<()> {
                             let block_length = point_range.points_in_file.len();
-                            let mut cursor = Cursor::new(file_data);
+                            // let mut cursor = Cursor::new(file_data);
 
                             let matching_indices_within_this_block =
                                 &mut all_matching_indices[..block_length];
@@ -214,18 +208,12 @@ impl ProgressiveIndex {
                             // IndexResult will be either partial match or full match
                             match index_result {
                                 super::IndexResult::MatchAll => {
-                                    let data = data_extractor
-                                        .extract_data(
-                                            &mut cursor,
-                                            &raw_header,
-                                            point_range,
-                                            matching_indices_within_this_block,
-                                            block_length,
-                                            &runtime_tracker,
-                                        )
-                                        .context("Failed to extract data for block")?;
-
-                                    result_collector.lock().unwrap().collect(data);
+                                    data_output.output(
+                                        &self.input_layer,
+                                        dataset_id,
+                                        point_range,
+                                        matching_indices_within_this_block,
+                                    )?;
 
                                     full_match_blocks.fetch_add(1, Ordering::SeqCst);
                                     total_points_queried.fetch_add(block_length, Ordering::SeqCst);
@@ -235,26 +223,20 @@ impl ProgressiveIndex {
                                     // We have to run the actual query on this block where only some indices match
                                     // eval() will correctly set the valid indices in 'all_matching_indices', so we don't have to reset this array in every loop iteration
                                     let num_matches = compiled_query.eval(
-                                        &mut cursor,
-                                        &raw_header,
+                                        &self.input_layer,
                                         point_range.clone(),
+                                        dataset_id,
                                         matching_indices_within_this_block,
                                         block_length,
                                         WhichIndicesToLoopOver::All,
                                         &runtime_tracker,
                                     )?;
-                                    let data = data_extractor
-                                        .extract_data(
-                                            &mut cursor,
-                                            &raw_header,
-                                            point_range.clone(),
-                                            matching_indices_within_this_block,
-                                            num_matches,
-                                            &runtime_tracker,
-                                        )
-                                        .context("Failed to extract data for block")?;
-
-                                    result_collector.lock().unwrap().collect(data);
+                                    data_output.output(
+                                        &self.input_layer,
+                                        dataset_id,
+                                        point_range,
+                                        matching_indices_within_this_block,
+                                    )?;
 
                                     partial_match_blocks.fetch_add(1, Ordering::SeqCst);
                                     total_points_queried.fetch_add(block_length, Ordering::SeqCst);
@@ -312,11 +294,10 @@ fn build_initial_block_indices<P: AsRef<Path>>(
 ) -> Result<(FxHashMap<ValueType, BlockIndex>, String)> {
     let common_extension =
         common_file_extension(files).context("Can't get common file extension")?;
-    let io_factory = IOFactory::default();
     let mut position_blocks = vec![];
     let mut classification_blocks = vec![];
     for (file_id, file) in files.iter().enumerate() {
-        let reader = io_factory.make_reader(file.as_ref()).context(format!(
+        let reader = GenericPointReader::open_file(file.as_ref()).context(format!(
             "Can't open file reader for file {}",
             file.as_ref().display()
         ))?;

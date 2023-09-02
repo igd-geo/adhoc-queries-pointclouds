@@ -1,17 +1,11 @@
-use std::sync::{Arc, Mutex};
 use std::{ops::Range, path::Path};
 
 use anyhow::Context;
 use anyhow::Result;
-use common::Point;
-use pasture_core::{
-    containers::{InterleavedPointBufferExt, InterleavedVecPointStorage},
-    math::AABB,
-    nalgebra::Point3,
-};
+use pasture_core::{math::AABB, nalgebra::Point3};
 
-use query::collect_points::BufferCollector;
 use query::index::NoRefinementStrategy;
+use query::io::InMemoryOutput;
 use query::{self, index::ProgressiveIndex};
 use scopeguard::defer;
 
@@ -25,15 +19,6 @@ mod common;
 // Tests could be as 'simple' as a set of input/output LAS files, together with a query. The output LAS files
 // could be generated with a baseline tool, e.g. LAStools
 // To compare the files, we should use point IDs and sort the output files by point IDs
-
-fn _assert_is_sorted(points: &InterleavedVecPointStorage) {
-    for (p1, p2) in points
-        .iter_point_ref::<Point>()
-        .zip(points.iter_point_ref::<Point>().skip(1))
-    {
-        assert!(p1.id < p2.id);
-    }
-}
 
 #[test]
 fn test_basic_query() -> Result<()> {
@@ -57,12 +42,12 @@ fn test_basic_query() -> Result<()> {
     let (expected_result, query) =
         setup_query(&test_data, Some(bounds), Some(classification_range));
 
-    let collector = Arc::new(Mutex::new(BufferCollector::new()));
+    let output = InMemoryOutput::default();
     indexer
-        .query(dataset_id, query, &NoRefinementStrategy, collector.clone())
+        .query(dataset_id, query, &NoRefinementStrategy, &output)
         .context("Query failed")?;
 
-    let combined_data = get_sorted_points_from_collector(collector);
+    let combined_data = get_sorted_points_from_collector(output);
 
     assert_points_match(&expected_result, &combined_data);
 

@@ -13,18 +13,11 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use experiment_archiver::{Experiment, VariableTemplate};
 use memmap::Mmap;
-use pasture_core::containers::{
-    InterleavedPointBufferSlice, InterleavedVecPointStorage, PointBuffer, PointBufferWriteable,
-};
+use pasture_core::containers::{BorrowedBuffer, InterleavedBuffer, OwningBuffer, VectorBuffer};
 use pasture_io::{
-    base::{IOFactory, PointReader},
+    base::{GenericPointReader, PointReader},
     las::LASReader,
-    las_rs::{raw::Header, Read},
-};
-use query::{
-    index::PointRange,
-    search::{Extractor, LASExtractor},
-    stats::BlockQueryRuntimeTracker,
+    las_rs::Read,
 };
 use rand::{thread_rng, Rng};
 
@@ -101,27 +94,25 @@ fn read_with_pasture(indices: &[bool], file: &Path, with_filtering: bool) -> Res
     let mut reader = LASReader::from_read(Cursor::new(file_mmap), false)
         .context("Failed to create LASReader")?;
 
-    let mut buffer = InterleavedVecPointStorage::with_capacity(
-        indices.len(),
-        reader.get_default_point_layout().clone(),
-    );
+    let mut buffer =
+        VectorBuffer::with_capacity(indices.len(), reader.get_default_point_layout().clone());
     reader
         .read_into(&mut buffer, indices.len())
         .context("Failed to read points with pasture")?;
 
     if with_filtering {
         let mut filtered_data =
-            InterleavedVecPointStorage::with_capacity(indices.len(), buffer.point_layout().clone());
+            VectorBuffer::with_capacity(indices.len(), buffer.point_layout().clone());
 
         for (index, keep) in indices.iter().enumerate() {
             if !keep {
                 continue;
             }
 
-            filtered_data.push(&InterleavedPointBufferSlice::new(
-                &buffer,
-                index..(index + 1),
-            ));
+            // Safe because both buffers share the same point layout
+            unsafe {
+                filtered_data.push_points(buffer.get_point_ref(index));
+            }
         }
     }
 
@@ -151,35 +142,35 @@ fn read_with_las_crate(indices: &[bool], file: &Path) -> Result<()> {
     Ok(())
 }
 
-fn read_with_extractor(indices: &[bool], file: &Path) -> Result<()> {
-    let file = File::open(file).context("Can't open file")?;
-    let file_mmap = unsafe { Mmap::map(&file).context("Can't mmap file")? };
-    let file_data: &[u8] = &file_mmap;
+// fn read_with_extractor(indices: &[bool], file: &Path) -> Result<()> {
+//     let file = File::open(file).context("Can't open file")?;
+//     let file_mmap = unsafe { Mmap::map(&file).context("Can't mmap file")? };
+//     let file_data: &[u8] = &file_mmap;
 
-    let raw_header =
-        Header::read_from(&mut Cursor::new(file_data)).context("Can't read LAS header")?;
+//     let raw_header =
+//         Header::read_from(&mut Cursor::new(file_data)).context("Can't read LAS header")?;
 
-    let extractor = LASExtractor;
-    let num_matches = indices.iter().filter(|b| **b).count();
-    let runtime_tracker = BlockQueryRuntimeTracker::default();
-    let result = extractor
-        .extract_data(
-            &mut Cursor::new(file_data),
-            &raw_header,
-            PointRange {
-                file_index: 0,
-                points_in_file: 0..indices.len(),
-            },
-            indices,
-            num_matches,
-            &runtime_tracker,
-        )
-        .context("Failed to extract data")?;
+//     let extractor = LASExtractor;
+//     let num_matches = indices.iter().filter(|b| **b).count();
+//     let runtime_tracker = BlockQueryRuntimeTracker::default();
+//     let result = extractor
+//         .extract_data(
+//             &mut Cursor::new(file_data),
+//             &raw_header,
+//             PointRange {
+//                 file_index: 0,
+//                 points_in_file: 0..indices.len(),
+//             },
+//             indices,
+//             num_matches,
+//             &runtime_tracker,
+//         )
+//         .context("Failed to extract data")?;
 
-    drop(result);
+//     drop(result);
 
-    Ok(())
-}
+//     Ok(())
+// }
 
 fn main() -> Result<()> {
     dotenv::dotenv().context("Failed to initialize with .env file")?;
@@ -227,9 +218,8 @@ fn main() -> Result<()> {
     // --> This could be a nice experiment for my diss
 
     let point_count = {
-        let reader = IOFactory::default()
-            .make_reader(&args.input_file)
-            .context("Could not open file")?;
+        let reader =
+            GenericPointReader::open_file(&args.input_file).context("Could not open file")?;
         let metadata = reader.get_metadata();
         metadata
             .number_of_points()
@@ -278,10 +268,10 @@ fn main() -> Result<()> {
             "pasture (filtered)",
         )?;
 
-        run_experiment(
-            Box::new(|| read_with_extractor(&sample, &args.input_file)),
-            "LASExtractor from query crate",
-        )?;
+        // run_experiment(
+        //     Box::new(|| read_with_extractor(&sample, &args.input_file)),
+        //     "LASExtractor from query crate",
+        // )?;
 
         run_experiment(
             Box::new(|| read_with_las_crate(&sample, &args.input_file)),

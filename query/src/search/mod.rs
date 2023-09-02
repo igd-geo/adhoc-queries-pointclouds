@@ -1,5 +1,5 @@
 mod las;
-pub use self::las::*;
+pub(crate) use self::las::*;
 
 // mod laz;
 // pub use self::laz::*;

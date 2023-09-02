@@ -1,65 +1,55 @@
 use anyhow::Result;
-use pasture_core::{
-    containers::{InterleavedVecPointStorage, PointBuffer, PointBufferWriteable},
-    math::AABB,
-};
+use pasture_core::{containers::BorrowedBuffer, math::AABB};
 
-use crate::grid_sampling::SparseGrid;
-
-pub trait PointBufferSend: PointBuffer + Send {
-    fn as_point_buffer(&self) -> &dyn PointBuffer;
-}
-impl<T: PointBuffer + Send> PointBufferSend for T {
-    fn as_point_buffer(&self) -> &dyn PointBuffer {
-        self
-    }
-}
+// use crate::grid_sampling::SparseGrid;
 
 pub trait ResultCollector: Send {
-    fn collect(&mut self, points: Box<dyn PointBufferSend>);
+    fn collect<'a, 'b, B: BorrowedBuffer<'a>>(&mut self, points: &'b B)
+    where
+        'a: 'b;
     fn point_count(&self) -> usize;
 }
 
-pub struct BufferCollector {
-    buffers: Vec<Box<dyn PointBufferSend>>,
-}
+// pub struct BufferCollector {
+//     buffers: Vec<Box<dyn PointBufferSend>>,
+// }
 
-impl BufferCollector {
-    pub fn new() -> Self {
-        Self {
-            buffers: Vec::new(),
-        }
-    }
+// impl BufferCollector {
+//     pub fn new() -> Self {
+//         Self {
+//             buffers: Vec::new(),
+//         }
+//     }
 
-    pub fn buffers(&self) -> &[Box<dyn PointBufferSend>] {
-        &self.buffers
-    }
+//     pub fn buffers(&self) -> &[Box<dyn PointBufferSend>] {
+//         &self.buffers
+//     }
 
-    pub fn as_single_buffer(&self) -> Option<InterleavedVecPointStorage> {
-        if self.buffers.is_empty() {
-            return None;
-        }
+//     pub fn as_single_buffer(&self) -> Option<InterleavedVecPointStorage> {
+//         if self.buffers.is_empty() {
+//             return None;
+//         }
 
-        let layout = self.buffers[0].point_layout();
-        let mut ret = InterleavedVecPointStorage::new(layout.clone());
+//         let layout = self.buffers[0].point_layout();
+//         let mut ret = InterleavedVecPointStorage::new(layout.clone());
 
-        for buffer in &self.buffers {
-            ret.push(buffer.as_point_buffer());
-        }
+//         for buffer in &self.buffers {
+//             ret.push(buffer.as_point_buffer());
+//         }
 
-        Some(ret)
-    }
-}
+//         Some(ret)
+//     }
+// }
 
-impl ResultCollector for BufferCollector {
-    fn point_count(&self) -> usize {
-        self.buffers.iter().map(|buf| buf.len()).sum()
-    }
+// impl ResultCollector for BufferCollector {
+//     fn point_count(&self) -> usize {
+//         self.buffers.iter().map(|buf| buf.len()).sum()
+//     }
 
-    fn collect(&mut self, points: Box<dyn PointBufferSend>) {
-        self.buffers.push(points);
-    }
-}
+//     fn collect(&mut self, points: Box<dyn PointBufferSend>) {
+//         self.buffers.push(points);
+//     }
+// }
 
 pub struct StdOutCollector {}
 
@@ -74,8 +64,11 @@ impl ResultCollector for StdOutCollector {
         0
     }
 
-    fn collect(&mut self, _points: Box<dyn PointBufferSend>) {
-        unimplemented!()
+    fn collect<'a, 'b, B: BorrowedBuffer<'a>>(&mut self, points: &'b B)
+    where
+        'a: 'b,
+    {
+        todo!()
     }
 }
 
@@ -94,7 +87,10 @@ impl ResultCollector for CountCollector {
         self.point_count
     }
 
-    fn collect(&mut self, points: Box<dyn PointBufferSend>) {
+    fn collect<'a, 'b, B: BorrowedBuffer<'a>>(&mut self, points: &'b B)
+    where
+        'a: 'b,
+    {
         self.point_count += points.len();
     }
 }
@@ -115,7 +111,10 @@ impl ResultCollector for GridSampledCollector {
         self.grid.points().count()
     }
 
-    fn collect(&mut self, _points: Box<dyn PointBufferSend>) {
-        unimplemented!()
+    fn collect<'a, 'b, B: BorrowedBuffer<'a>>(&mut self, points: &'b B)
+    where
+        'a: 'b,
+    {
+        todo!()
     }
 }

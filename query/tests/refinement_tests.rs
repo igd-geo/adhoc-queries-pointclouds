@@ -1,14 +1,10 @@
-use std::{
-    ops::Range,
-    path::Path,
-    sync::{Arc, Mutex},
-};
+use std::{ops::Range, path::Path};
 
 use anyhow::{Context, Result};
 use pasture_core::{math::AABB, nalgebra::Point3};
 use query::{
-    collect_points::{BufferCollector, CountCollector},
     index::{ProgressiveIndex, RefinementStrategy, ValueType},
+    io::InMemoryOutput,
 };
 use scopeguard::defer;
 
@@ -55,9 +51,9 @@ fn test_refinement_position_index() -> Result<()> {
     // PositionIndex covering the whole file. This range of points is large enough to be refined into 4 sub-blocks, so this
     // is what we expect after we run the query: 4 blocks instead of 1
 
-    let collector = Arc::new(Mutex::new(CountCollector::new()));
+    let output = InMemoryOutput::default();
     indexer
-        .query(dataset_id, query, &RefinementStrategyAlways, collector)
+        .query(dataset_id, query, &RefinementStrategyAlways, &output)
         .context("Error while querying")?;
 
     let dataset = indexer.datasets().get(&dataset_id).unwrap();
@@ -103,28 +99,28 @@ fn test_running_query_multiple_times_gives_identical_results() -> Result<()> {
     let (expected_result, query) =
         setup_query(&test_data, Some(bounds), Some(classification_range));
 
-    let collector_first_query = Arc::new(Mutex::new(BufferCollector::new()));
+    let output_first_query = InMemoryOutput::default();
     indexer
         .query(
             dataset_id,
             query.clone(),
             &RefinementStrategyAlways,
-            collector_first_query.clone(),
+            &output_first_query,
         )
         .context("Error while querying")?;
 
-    let collector_second_query = Arc::new(Mutex::new(BufferCollector::new()));
+    let output_second_query = InMemoryOutput::default();
     indexer
         .query(
             dataset_id,
             query.clone(),
             &RefinementStrategyAlways,
-            collector_second_query.clone(),
+            &output_second_query,
         )
         .context("Error while querying")?;
 
-    let first_query_points = get_sorted_points_from_collector(collector_first_query);
-    let second_query_points = get_sorted_points_from_collector(collector_second_query);
+    let first_query_points = get_sorted_points_from_collector(output_first_query);
+    let second_query_points = get_sorted_points_from_collector(output_second_query);
 
     assert_points_match(&expected_result, &first_query_points);
     assert_points_match(&expected_result, &second_query_points);
