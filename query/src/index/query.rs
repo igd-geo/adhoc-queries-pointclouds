@@ -455,16 +455,23 @@ pub enum CompareExpression {
 }
 
 #[derive(Clone, Debug)]
+pub enum Geometry {
+    Polygon(geo::Polygon),
+}
+
+#[derive(Clone, Debug)]
 pub enum AtomicExpression {
-    Within(Range<Value>),
     Compare((CompareExpression, Value)),
+    Intersects(Geometry),
+    Within(Range<Value>),
 }
 
 impl AtomicExpression {
     pub(crate) fn value_type(&self) -> ValueType {
         match self {
-            AtomicExpression::Within(range) => range.start.value_type(),
             AtomicExpression::Compare((_, value)) => value.value_type(),
+            AtomicExpression::Intersects(_) => ValueType::Position3D,
+            AtomicExpression::Within(range) => range.start.value_type(),
         }
     }
 }

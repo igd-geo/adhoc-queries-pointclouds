@@ -2,6 +2,7 @@ use std::{fmt::Display, ops::Range, path::PathBuf};
 
 use anyhow::{Context, Result};
 use divide_range::RangeDivisions;
+use geo::{coord, Intersects, Contains};
 use itertools::Itertools;
 use pasture_core::{
     math::AABB,
@@ -12,7 +13,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::io::{open_reader, PointReader};
 
-use super::{AtomicExpression, CompareExpression, Index, IndexResult, Value, ValueType};
+use super::{AtomicExpression, CompareExpression, Index, IndexResult, Value, ValueType, Geometry};
 
 // TODO pasture_core does not support serde, maybe implement it?
 
@@ -80,6 +81,31 @@ impl PositionIndex {
             }
         }
     }
+
+    fn intersects(&self, geometry: &Geometry) -> IndexResult {
+        match geometry {
+            Geometry::Polygon(polygon) => {
+                let self_bounds_as_2d_rect = geo::Rect::new(coord! {
+                    x: self.bounds.min().x,
+                    y: self.bounds.min().y,
+                }, coord! {
+                    x: self.bounds.max().x,
+                    y: self.bounds.max().y,
+                });
+                let intersects = polygon.intersects(&self_bounds_as_2d_rect);
+                if !intersects {
+                    IndexResult::NoMatch
+                } else {
+                    // Is this index fully contained within the polygon?
+                    if polygon.contains(&self_bounds_as_2d_rect) {
+                        IndexResult::MatchAll
+                    } else {
+                        IndexResult::MatchSome
+                    }
+                }
+            }
+        }
+    }
 }
 
 #[typetag::serde]
@@ -92,6 +118,8 @@ impl Index for PositionIndex {
                     (other_start, other_end) => panic!("Encountered invalid values for range of 'Within' expression. Expected (Position, Position) but got ({},{}) instead", other_start.value_type(), other_end.value_type()),
                 }
             },
+            AtomicExpression::Intersects(geometry) => 
+                self.intersects(geometry),
             other => panic!("Unsupported query expression {other:#?} for PositionIndex"),
         }
     }
@@ -210,6 +238,7 @@ impl Index for ClassificationIndex {
                     (other_min, other_max) => panic!("Encountered invalid values for range of 'Within' expression. Expected (Classification, Classification) but got ({},{}) instead", other_min.value_type(), other_max.value_type()),
                 }
             },
+            other => panic!("ClassificationIndex does not support query expression {other:#?}"),
         }
     }
 

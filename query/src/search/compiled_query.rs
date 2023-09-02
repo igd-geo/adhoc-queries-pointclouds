@@ -6,7 +6,7 @@ use crate::{
     stats::BlockQueryRuntimeTracker,
 };
 
-use super::{LasQueryAtomCompare, LasQueryAtomWithin};
+use super::{LasQueryAtomCompare, LasQueryAtomIntersects, LasQueryAtomWithin};
 
 /// A single piece of a query compiled into an optimized format so that we can pass it the raw memory of a file (LAS, LAZ, LAST, etc.)
 /// together with the file header. Evaluating a query atom sets all matching indices in `matching_indices` to true
@@ -161,6 +161,9 @@ pub(crate) fn compile_query(
                     };
                     Ok(CompiledQueryExpression::Atom(las_expr))
                 }
+                AtomicExpression::Intersects(geometry) => Ok(CompiledQueryExpression::Atom(
+                    Box::new(LasQueryAtomIntersects::new(geometry.clone())),
+                )),
             },
             _ => bail!("Unsupported file format {}", file_format),
         },

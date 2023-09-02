@@ -1,11 +1,12 @@
 use crate::{
-    index::{Classification, CompareExpression, DatasetID, PointRange, Position},
+    index::{Classification, CompareExpression, DatasetID, Geometry, PointRange, Position},
     io::{FileHandle, InputLayer},
     stats::{BlockQueryRuntimeTracker, BlockQueryRuntimeType},
 };
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
 
+use geo::{coord, Contains, LineString, Polygon};
 use pasture_core::{
     containers::BorrowedBuffer,
     layout::{
@@ -15,7 +16,7 @@ use pasture_core::{
     math::AABB,
     nalgebra::{clamp, Point3, Vector3},
 };
-use pasture_io::las_rs::{raw, Transform};
+use pasture_io::las_rs::{raw, Transform, Vector};
 use std::io::{Cursor, Seek};
 use std::ops::Range;
 use std::{io::SeekFrom, time::Instant};
@@ -88,6 +89,42 @@ fn _get_bounds_of_point_range(
             (local_max.z as f64 * file_header.z_scale_factor) + file_header.z_offset,
         ),
     ))
+}
+
+fn line_string_to_local_las_space(
+    line_string: &LineString,
+    las_transforms: &Vector<Transform>,
+) -> LineString {
+    let local_coords = line_string
+        .0
+        .iter()
+        .map(|coord| {
+            coord! {
+                x: (coord.x / las_transforms.x.scale) - las_transforms.x.offset,
+                y: (coord.y / las_transforms.y.scale) - las_transforms.y.offset,
+            }
+        })
+        .collect();
+    LineString(local_coords)
+}
+
+/// Converts the given `geometry` to the local coordinate system of a LAS file, based on the given LAS transforms
+fn geometry_to_local_las_space(
+    geometry: &Geometry,
+    las_transforms: &Vector<Transform>,
+) -> Geometry {
+    match geometry {
+        Geometry::Polygon(world_space_polygon) => {
+            let local_exterior =
+                line_string_to_local_las_space(world_space_polygon.exterior(), las_transforms);
+            let local_interiors = world_space_polygon
+                .interiors()
+                .iter()
+                .map(|line_str| line_string_to_local_las_space(line_str, las_transforms))
+                .collect();
+            Geometry::Polygon(Polygon::new(local_exterior, local_interiors))
+        }
+    }
 }
 
 // pub struct LASExtractor;
@@ -540,6 +577,66 @@ impl CompiledQueryAtom for LasQueryAtomCompare<Classification> {
                 let test_point = |point_index: usize| -> Result<bool> {
                     let classification = classifications.at(point_index);
                     Ok(classification >= self.value.0)
+                };
+
+                eval_impl(
+                    block,
+                    matching_indices,
+                    which_indices_to_loop_over,
+                    test_point,
+                    runtime_tracker,
+                )
+            }
+        }
+    }
+}
+
+pub(crate) struct LasQueryAtomIntersects {
+    geometry: Geometry,
+}
+
+impl LasQueryAtomIntersects {
+    pub(crate) fn new(geometry: Geometry) -> Self {
+        Self { geometry }
+    }
+}
+
+impl CompiledQueryAtom for LasQueryAtomIntersects {
+    fn eval(
+        &self,
+        input_layer: &InputLayer,
+        block: PointRange,
+        dataset_id: DatasetID,
+        matching_indices: &'_ mut [bool],
+        which_indices_to_loop_over: super::WhichIndicesToLoopOver,
+        runtime_tracker: &BlockQueryRuntimeTracker,
+    ) -> Result<usize> {
+        let las_metadata = input_layer
+            .get_las_metadata(FileHandle(dataset_id, block.file_index))
+            .ok_or(anyhow!("No LAS metadata found"))?;
+        let las_transforms = las_metadata
+            .raw_las_header()
+            .ok_or(anyhow!("No LAS header found"))?
+            .transforms();
+        let local_geometry = geometry_to_local_las_space(&self.geometry, las_transforms);
+
+        // We can access the raw position data using a pasture `AttributeView`
+        let point_data = input_layer
+            .get_point_data(dataset_id, block.clone())
+            .context("Could not access point data")?;
+        let positions = point_data.view_attribute::<Vector3<i32>>(
+            &POSITION_3D.with_custom_datatype(PointAttributeDataType::Vec3i32),
+        );
+
+        match local_geometry {
+            Geometry::Polygon(polygon) => {
+                let test_point = |point_index: usize| -> Result<bool> {
+                    let position = positions.at(point_index);
+                    let geo_point = geo::Point(coord! {
+                        x: position.x as f64,
+                        y: position.y as f64,
+                    });
+                    Ok(polygon.contains(&geo_point))
                 };
 
                 eval_impl(

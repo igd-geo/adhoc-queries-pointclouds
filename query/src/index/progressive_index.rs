@@ -269,7 +269,7 @@ impl ProgressiveIndex {
         //     dataset.index.blocks_count()
         // );
 
-        runtime_tracker.to_csv(BufWriter::new(File::create("query.csv")?))?;
+        // runtime_tracker.to_csv(BufWriter::new(File::create("query.csv")?))?;
 
         Ok(QueryStats {
             total_blocks_queried: 0, //TODO

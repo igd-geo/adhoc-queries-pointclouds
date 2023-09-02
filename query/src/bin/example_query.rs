@@ -1,11 +1,12 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
+use geo::{line_string, Polygon};
 use pasture_core::nalgebra::Vector3;
 use query::{
     index::{
-        AtomicExpression, Classification, CompareExpression, NoRefinementStrategy, Position,
-        ProgressiveIndex, QueryExpression, Value,
+        AtomicExpression, Classification, CompareExpression, Geometry, NoRefinementStrategy,
+        Position, ProgressiveIndex, QueryExpression, Value,
     },
     io::NullOutput,
 };
@@ -37,6 +38,13 @@ fn main() -> Result<()> {
         Value::Position(Position(Vector3::new(390000.0, 130000.0, 0.0)))
             ..Value::Position(Position(Vector3::new(390500.0, 140000.0, 200.0))),
     ));
+    let query_doc_polygon_s = QueryExpression::Atomic(AtomicExpression::Intersects(
+        Geometry::Polygon(Polygon::new(
+            line_string![(x: 390000.0, y: 130000.0), (x: 390500.0, y: 130000.0), (x: 390500.0, y: 140000.0), (x: 390000.0, y: 140000.0), (x: 390000.0, y: 130000.0)],
+            vec![],
+        )),
+    ));
+
     let query_doc_aabb_l = QueryExpression::Atomic(AtomicExpression::Within(
         Value::Position(Position(Vector3::new(390000.0, 130000.0, 0.0)))
             ..Value::Position(Position(Vector3::new(400000.0, 140000.0, 200.0))),
@@ -71,7 +79,7 @@ fn main() -> Result<()> {
     let output = NullOutput::default();
     let stats = progressive_index.query(
         dataset_id,
-        query_doc_all_buildings,
+        query_doc_polygon_s,
         &NoRefinementStrategy,
         &output,
     )?;
