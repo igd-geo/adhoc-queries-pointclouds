@@ -1,2 +1,2 @@
 [workspace]
-members = ["readers", "query", "prog_index_server"]
+members = ["io", "query", "prog_index_server"]

@@ -140,13 +140,27 @@ pub(crate) fn compile_query(
             "las" => match atomic_expr {
                 AtomicExpression::Within(range) => {
                     let las_expr: Box<dyn CompiledQueryAtom> = match (range.start, range.end) {
+                        // TODO How can I match on 'both enums have the same type'?
                         (Value::Classification(min), Value::Classification(max)) => {
                             Box::new(LasQueryAtomWithin::new(min, max))
                         }
                         (Value::Position(min), Value::Position(max)) => {
                             Box::new(LasQueryAtomWithin::new(min, max))
                         }
-                        _ => bail!("Wrong Value types, min and max Value must have the same type!"),
+                        (Value::GpsTime(min), Value::GpsTime(max)) => {
+                            Box::new(LasQueryAtomWithin::new(min, max))
+                        }
+                        (Value::ReturnNumber(min), Value::ReturnNumber(max)) => {
+                            Box::new(LasQueryAtomWithin::new(min, max))
+                        }
+                        (Value::NumberOfReturns(min), Value::NumberOfReturns(max)) => {
+                            Box::new(LasQueryAtomWithin::new(min, max))
+                        }
+                        (min, max) => bail!(
+                            "Wrong Value types ({},{}) for Within expression!",
+                            min.value_type(),
+                            max.value_type()
+                        ),
                     };
                     Ok(CompiledQueryExpression::Atom(las_expr))
                 }
@@ -157,6 +171,15 @@ pub(crate) fn compile_query(
                         }
                         Value::Classification(classification) => {
                             Box::new(LasQueryAtomCompare::new(*classification, *compare_expr))
+                        }
+                        Value::GpsTime(gps_time) => {
+                            Box::new(LasQueryAtomCompare::new(*gps_time, *compare_expr))
+                        }
+                        Value::ReturnNumber(return_number) => {
+                            Box::new(LasQueryAtomCompare::new(*return_number, *compare_expr))
+                        }
+                        Value::NumberOfReturns(number_of_returns) => {
+                            Box::new(LasQueryAtomCompare::new(*number_of_returns, *compare_expr))
                         }
                     };
                     Ok(CompiledQueryExpression::Atom(las_expr))

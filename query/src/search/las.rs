@@ -1,5 +1,8 @@
 use crate::{
-    index::{Classification, CompareExpression, DatasetID, Geometry, PointRange, Position},
+    index::{
+        Classification, CompareExpression, DatasetID, Geometry, GpsTime, NumberOfReturns,
+        PointRange, Position, ReturnNumber,
+    },
     io::{FileHandle, InputLayer},
     stats::{BlockQueryRuntimeTracker, BlockQueryRuntimeType},
 };
@@ -8,15 +11,18 @@ use byteorder::{LittleEndian, ReadBytesExt};
 
 use geo::{coord, Contains, LineString, Polygon};
 use pasture_core::{
-    containers::BorrowedBuffer,
+    containers::{AttributeView, BorrowedBuffer},
     layout::{
-        attributes::{CLASSIFICATION, POSITION_3D},
-        PointAttributeDataType,
+        attributes::{CLASSIFICATION, GPS_TIME, POSITION_3D},
+        PointAttributeDataType, PrimitiveType,
     },
     math::AABB,
     nalgebra::{clamp, Point3, Vector3},
 };
-use pasture_io::las_rs::{raw, Transform, Vector};
+use pasture_io::{
+    las::{ATTRIBUTE_BASIC_FLAGS, ATTRIBUTE_EXTENDED_FLAGS},
+    las_rs::{raw, Transform, Vector},
+};
 use std::io::{Cursor, Seek};
 use std::ops::Range;
 use std::{io::SeekFrom, time::Instant};
@@ -127,152 +133,21 @@ fn geometry_to_local_las_space(
     }
 }
 
-// pub struct LASExtractor;
+fn return_number_from_las_basic_flags(flags: u8) -> u8 {
+    flags & 0b111
+}
 
-// impl Extractor for LASExtractor {
-//     fn extract_data(
-//         &self,
-//         file: &mut Cursor<&[u8]>,
-//         file_header: &raw::Header,
-//         block: PointRange,
-//         matching_indices: &[bool],
-//         num_matches: usize,
-//         runtime_tracker: &BlockQueryRuntimeTracker,
-//     ) -> Result<Box<dyn PointBufferSend>> {
-//         let t_start = Instant::now();
-//         defer! {
-//             runtime_tracker.log_runtime(block.clone(), BlockQueryRuntimeType::Extraction, t_start.elapsed());
-//         }
+fn return_number_from_las_extended_flags(flags: u16) -> u8 {
+    (flags & 0b1111) as u8
+}
 
-//         {
-//             let mut num_disjoint_ranges: usize = 0;
-//             for (current_included, next_included) in
-//                 matching_indices.iter().zip(matching_indices.iter().skip(1))
-//             {
-//                 if current_included != next_included {
-//                     num_disjoint_ranges += 1;
-//                 }
-//             }
-//             info!("Num disjoint ranges @ {block}: {num_disjoint_ranges}");
-//         }
+fn number_of_returns_from_las_basic_flags(flags: u8) -> u8 {
+    (flags >> 3) & 0b111
+}
 
-//         let point_format =
-//             Format::new(file_header.point_data_record_format).expect("Invalid point format");
-//         let mut buffer = VectorBuffer::with_capacity(
-//             num_matches,
-//             point_layout_from_las_point_format(&point_format, false)?,
-//         );
-//         buffer.resize(num_matches);
-
-//         // let num_matches_counted: usize = matching_indices.iter().filter(|b| **b).count();
-//         // assert_eq!(num_matches, num_matches_counted);
-
-//         let point_raw_data = buffer.get_raw_points_mut(0..num_matches);
-//         let mut point_data_writer = Cursor::new(point_raw_data);
-
-//         for (relative_index, _) in matching_indices
-//             .iter()
-//             .enumerate()
-//             .filter(|(_, is_match)| **is_match)
-//         {
-//             let point_index = relative_index + block.points_in_file.start;
-//             let point_offset: u64 = point_index as u64
-//                 * file_header.point_data_record_length as u64
-//                 + file_header.offset_to_point_data as u64;
-//             file.seek(SeekFrom::Start(point_offset))?;
-
-//             // XYZ
-//             let local_x = file.read_i32::<LittleEndian>()?;
-//             let local_y = file.read_i32::<LittleEndian>()?;
-//             let local_z = file.read_i32::<LittleEndian>()?;
-//             let global_x = (local_x as f64 * file_header.x_scale_factor) + file_header.x_offset;
-//             let global_y = (local_y as f64 * file_header.y_scale_factor) + file_header.y_offset;
-//             let global_z = (local_z as f64 * file_header.z_scale_factor) + file_header.z_offset;
-//             point_data_writer.write_f64::<NativeEndian>(global_x)?;
-//             point_data_writer.write_f64::<NativeEndian>(global_y)?;
-//             point_data_writer.write_f64::<NativeEndian>(global_z)?;
-
-//             // Intensity
-//             point_data_writer.write_i16::<NativeEndian>(file.read_i16::<LittleEndian>()?)?;
-
-//             // Bit attributes
-//             if point_format.is_extended {
-//                 let bit_attributes_first_byte = file.read_u8()?;
-//                 let bit_attributes_second_byte = file.read_u8()?;
-
-//                 let return_number = bit_attributes_first_byte & 0b1111;
-//                 let number_of_returns = (bit_attributes_first_byte >> 4) & 0b1111;
-//                 let classification_flags = bit_attributes_second_byte & 0b1111;
-//                 let scanner_channel = (bit_attributes_second_byte >> 4) & 0b11;
-//                 let scan_direction_flag = (bit_attributes_second_byte >> 6) & 0b1;
-//                 let edge_of_flight_line = (bit_attributes_second_byte >> 7) & 0b1;
-
-//                 point_data_writer.write_u8(return_number)?;
-//                 point_data_writer.write_u8(number_of_returns)?;
-//                 point_data_writer.write_u8(classification_flags)?;
-//                 point_data_writer.write_u8(scanner_channel)?;
-//                 point_data_writer.write_u8(scan_direction_flag)?;
-//                 point_data_writer.write_u8(edge_of_flight_line)?;
-//             } else {
-//                 let bit_attributes = file.read_u8()?;
-//                 let return_number = bit_attributes & 0b111;
-//                 let number_of_returns = (bit_attributes >> 3) & 0b111;
-//                 let scan_direction_flag = (bit_attributes >> 6) & 0b1;
-//                 let edge_of_flight_line = (bit_attributes >> 7) & 0b1;
-
-//                 point_data_writer.write_u8(return_number)?;
-//                 point_data_writer.write_u8(number_of_returns)?;
-//                 point_data_writer.write_u8(scan_direction_flag)?;
-//                 point_data_writer.write_u8(edge_of_flight_line)?;
-//             }
-
-//             // Classification
-//             point_data_writer.write_u8(file.read_u8()?)?;
-
-//             // User data in format > 5, scan angle rank in format <= 5
-//             point_data_writer.write_u8(file.read_u8()?)?;
-
-//             if !point_format.is_extended {
-//                 // User data
-//                 point_data_writer.write_u8(file.read_u8()?)?;
-//             } else {
-//                 // Scan angle
-//                 point_data_writer.write_i16::<NativeEndian>(file.read_i16::<LittleEndian>()?)?;
-//             }
-
-//             // Point source ID
-//             point_data_writer.write_u16::<NativeEndian>(file.read_u16::<LittleEndian>()?)?;
-
-//             // Format 0 is done here, the other formats are handled now
-
-//             if point_format.has_gps_time {
-//                 point_data_writer.write_f64::<NativeEndian>(file.read_f64::<LittleEndian>()?)?;
-//             }
-
-//             if point_format.has_color {
-//                 point_data_writer.write_u16::<NativeEndian>(file.read_u16::<LittleEndian>()?)?;
-//                 point_data_writer.write_u16::<NativeEndian>(file.read_u16::<LittleEndian>()?)?;
-//                 point_data_writer.write_u16::<NativeEndian>(file.read_u16::<LittleEndian>()?)?;
-//             }
-
-//             if point_format.has_nir {
-//                 point_data_writer.write_u16::<NativeEndian>(file.read_u16::<LittleEndian>()?)?;
-//             }
-
-//             if point_format.has_waveform {
-//                 point_data_writer.write_u8(file.read_u8()?)?;
-//                 point_data_writer.write_u64::<NativeEndian>(file.read_u64::<LittleEndian>()?)?;
-//                 point_data_writer.write_u32::<NativeEndian>(file.read_u32::<LittleEndian>()?)?;
-//                 point_data_writer.write_f32::<NativeEndian>(file.read_f32::<LittleEndian>()?)?;
-//                 point_data_writer.write_f32::<NativeEndian>(file.read_f32::<LittleEndian>()?)?;
-//                 point_data_writer.write_f32::<NativeEndian>(file.read_f32::<LittleEndian>()?)?;
-//                 point_data_writer.write_f32::<NativeEndian>(file.read_f32::<LittleEndian>()?)?;
-//             }
-//         }
-
-//         Ok(Box::new(buffer))
-//     }
-// }
+fn number_of_returns_from_las_extended_flags(flags: u16) -> u8 {
+    ((flags >> 4) & 0b1111) as u8
+}
 
 /// Implementation of the 'Within' query for LAS files
 pub(crate) struct LasQueryAtomWithin<T> {
@@ -297,6 +172,205 @@ impl<T> LasQueryAtomCompare<T> {
         Self {
             value,
             compare_expression,
+        }
+    }
+
+    fn eval_primitive<U: PrimitiveType + PartialEq + PartialOrd, B: for<'a> BorrowedBuffer<'a>>(
+        &self,
+        primitive_attributes: AttributeView<'_, '_, B, U>,
+        compare_value: U,
+        block: PointRange,
+        matching_indices: &'_ mut [bool],
+        which_indices_to_loop_over: super::WhichIndicesToLoopOver,
+        runtime_tracker: &BlockQueryRuntimeTracker,
+    ) -> Result<usize> {
+        match self.compare_expression {
+            CompareExpression::Equals => {
+                let test_point = |point_index: usize| -> Result<bool> {
+                    let attribute = primitive_attributes.at(point_index);
+                    Ok(attribute == compare_value)
+                };
+
+                eval_impl(
+                    block,
+                    matching_indices,
+                    which_indices_to_loop_over,
+                    test_point,
+                    runtime_tracker,
+                )
+            }
+            CompareExpression::NotEquals => {
+                let test_point = |point_index: usize| -> Result<bool> {
+                    let attribute = primitive_attributes.at(point_index);
+                    Ok(attribute != compare_value)
+                };
+
+                eval_impl(
+                    block,
+                    matching_indices,
+                    which_indices_to_loop_over,
+                    test_point,
+                    runtime_tracker,
+                )
+            }
+            CompareExpression::LessThan => {
+                let test_point = |point_index: usize| -> Result<bool> {
+                    let attribute = primitive_attributes.at(point_index);
+                    Ok(attribute < compare_value)
+                };
+
+                eval_impl(
+                    block,
+                    matching_indices,
+                    which_indices_to_loop_over,
+                    test_point,
+                    runtime_tracker,
+                )
+            }
+            CompareExpression::LessThanOrEquals => {
+                let test_point = |point_index: usize| -> Result<bool> {
+                    let attribute = primitive_attributes.at(point_index);
+                    Ok(attribute <= compare_value)
+                };
+
+                eval_impl(
+                    block,
+                    matching_indices,
+                    which_indices_to_loop_over,
+                    test_point,
+                    runtime_tracker,
+                )
+            }
+            CompareExpression::GreaterThan => {
+                let test_point = |point_index: usize| -> Result<bool> {
+                    let attribute = primitive_attributes.at(point_index);
+                    Ok(attribute > compare_value)
+                };
+
+                eval_impl(
+                    block,
+                    matching_indices,
+                    which_indices_to_loop_over,
+                    test_point,
+                    runtime_tracker,
+                )
+            }
+            CompareExpression::GreaterThanOrEquals => {
+                let test_point = |point_index: usize| -> Result<bool> {
+                    let attribute = primitive_attributes.at(point_index);
+                    Ok(attribute >= compare_value)
+                };
+
+                eval_impl(
+                    block,
+                    matching_indices,
+                    which_indices_to_loop_over,
+                    test_point,
+                    runtime_tracker,
+                )
+            }
+        }
+    }
+
+    fn eval_flags_primitive<
+        Flag: PrimitiveType,
+        U: PrimitiveType + PartialEq + PartialOrd,
+        B: for<'a> BorrowedBuffer<'a>,
+    >(
+        &self,
+        flags: AttributeView<'_, '_, B, Flag>,
+        extractor: impl Fn(Flag) -> U,
+        compare_value: U,
+        block: PointRange,
+        matching_indices: &'_ mut [bool],
+        which_indices_to_loop_over: super::WhichIndicesToLoopOver,
+        runtime_tracker: &BlockQueryRuntimeTracker,
+    ) -> Result<usize> {
+        match self.compare_expression {
+            CompareExpression::Equals => {
+                let test_point = |point_index: usize| -> Result<bool> {
+                    let attribute = extractor(flags.at(point_index));
+                    Ok(attribute == compare_value)
+                };
+
+                eval_impl(
+                    block,
+                    matching_indices,
+                    which_indices_to_loop_over,
+                    test_point,
+                    runtime_tracker,
+                )
+            }
+            CompareExpression::NotEquals => {
+                let test_point = |point_index: usize| -> Result<bool> {
+                    let attribute = extractor(flags.at(point_index));
+                    Ok(attribute != compare_value)
+                };
+
+                eval_impl(
+                    block,
+                    matching_indices,
+                    which_indices_to_loop_over,
+                    test_point,
+                    runtime_tracker,
+                )
+            }
+            CompareExpression::LessThan => {
+                let test_point = |point_index: usize| -> Result<bool> {
+                    let attribute = extractor(flags.at(point_index));
+                    Ok(attribute < compare_value)
+                };
+
+                eval_impl(
+                    block,
+                    matching_indices,
+                    which_indices_to_loop_over,
+                    test_point,
+                    runtime_tracker,
+                )
+            }
+            CompareExpression::LessThanOrEquals => {
+                let test_point = |point_index: usize| -> Result<bool> {
+                    let attribute = extractor(flags.at(point_index));
+                    Ok(attribute <= compare_value)
+                };
+
+                eval_impl(
+                    block,
+                    matching_indices,
+                    which_indices_to_loop_over,
+                    test_point,
+                    runtime_tracker,
+                )
+            }
+            CompareExpression::GreaterThan => {
+                let test_point = |point_index: usize| -> Result<bool> {
+                    let attribute = extractor(flags.at(point_index));
+                    Ok(attribute > compare_value)
+                };
+
+                eval_impl(
+                    block,
+                    matching_indices,
+                    which_indices_to_loop_over,
+                    test_point,
+                    runtime_tracker,
+                )
+            }
+            CompareExpression::GreaterThanOrEquals => {
+                let test_point = |point_index: usize| -> Result<bool> {
+                    let attribute = extractor(flags.at(point_index));
+                    Ok(attribute >= compare_value)
+                };
+
+                eval_impl(
+                    block,
+                    matching_indices,
+                    which_indices_to_loop_over,
+                    test_point,
+                    runtime_tracker,
+                )
+            }
         }
     }
 }
@@ -428,6 +502,138 @@ impl CompiledQueryAtom for LasQueryAtomWithin<Classification> {
     }
 }
 
+impl CompiledQueryAtom for LasQueryAtomWithin<ReturnNumber> {
+    fn eval(
+        &self,
+        input_layer: &InputLayer,
+        block: PointRange,
+        dataset_id: DatasetID,
+        matching_indices: &'_ mut [bool],
+        which_indices_to_loop_over: super::WhichIndicesToLoopOver,
+        runtime_tracker: &BlockQueryRuntimeTracker,
+    ) -> Result<usize> {
+        let point_data = input_layer
+            .get_point_data(dataset_id, block.clone())
+            .context("Could not access point data")?;
+        // Since we are working with raw LAS files, we can't access the bit-flag attributes separately and instead
+        // have to use either `ATTRIBUTE_BASIC_FLAGS` or `ATTRIBUTE_EXTENDED_FLAGS`
+        if point_data
+            .point_layout()
+            .has_attribute(&ATTRIBUTE_BASIC_FLAGS)
+        {
+            let flags = point_data.view_attribute::<u8>(&ATTRIBUTE_BASIC_FLAGS);
+            let test_point = |point_index: usize| -> Result<bool> {
+                let flag = flags.at(point_index);
+                let return_number = return_number_from_las_basic_flags(flag);
+                Ok(return_number >= self.min.0 && return_number < self.max.0)
+            };
+
+            eval_impl(
+                block,
+                matching_indices,
+                which_indices_to_loop_over,
+                test_point,
+                runtime_tracker,
+            )
+        } else {
+            let extended_flags = point_data.view_attribute::<u16>(&ATTRIBUTE_EXTENDED_FLAGS);
+            let test_point = |point_index: usize| -> Result<bool> {
+                let flag = extended_flags.at(point_index);
+                let return_number = return_number_from_las_extended_flags(flag);
+                Ok(return_number >= self.min.0 && return_number < self.max.0)
+            };
+
+            eval_impl(
+                block,
+                matching_indices,
+                which_indices_to_loop_over,
+                test_point,
+                runtime_tracker,
+            )
+        }
+    }
+}
+
+impl CompiledQueryAtom for LasQueryAtomWithin<NumberOfReturns> {
+    fn eval(
+        &self,
+        input_layer: &InputLayer,
+        block: PointRange,
+        dataset_id: DatasetID,
+        matching_indices: &'_ mut [bool],
+        which_indices_to_loop_over: super::WhichIndicesToLoopOver,
+        runtime_tracker: &BlockQueryRuntimeTracker,
+    ) -> Result<usize> {
+        let point_data = input_layer
+            .get_point_data(dataset_id, block.clone())
+            .context("Could not access point data")?;
+        if point_data
+            .point_layout()
+            .has_attribute(&ATTRIBUTE_BASIC_FLAGS)
+        {
+            let flags = point_data.view_attribute::<u8>(&ATTRIBUTE_BASIC_FLAGS);
+            let test_point = |point_index: usize| -> Result<bool> {
+                let flag = flags.at(point_index);
+                let number_of_returns = number_of_returns_from_las_basic_flags(flag);
+                Ok(number_of_returns >= self.min.0 && number_of_returns < self.max.0)
+            };
+
+            eval_impl(
+                block,
+                matching_indices,
+                which_indices_to_loop_over,
+                test_point,
+                runtime_tracker,
+            )
+        } else {
+            let extended_flags = point_data.view_attribute::<u16>(&ATTRIBUTE_EXTENDED_FLAGS);
+            let test_point = |point_index: usize| -> Result<bool> {
+                let flag = extended_flags.at(point_index);
+                let number_of_returns = number_of_returns_from_las_extended_flags(flag);
+                Ok(number_of_returns >= self.min.0 && number_of_returns < self.max.0)
+            };
+
+            eval_impl(
+                block,
+                matching_indices,
+                which_indices_to_loop_over,
+                test_point,
+                runtime_tracker,
+            )
+        }
+    }
+}
+
+impl CompiledQueryAtom for LasQueryAtomWithin<GpsTime> {
+    fn eval(
+        &self,
+        input_layer: &InputLayer,
+        block: PointRange,
+        dataset_id: DatasetID,
+        matching_indices: &'_ mut [bool],
+        which_indices_to_loop_over: super::WhichIndicesToLoopOver,
+        runtime_tracker: &BlockQueryRuntimeTracker,
+    ) -> Result<usize> {
+        let point_data = input_layer
+            .get_point_data(dataset_id, block.clone())
+            .context("Could not access point data")?;
+        let gps_times = point_data.view_attribute::<f64>(&GPS_TIME);
+
+        let test_point = |point_index: usize| -> Result<bool> {
+            let gps_time = gps_times.at(point_index);
+            Ok(gps_time >= self.min.0 && gps_time < self.max.0)
+        };
+
+        eval_impl(
+            block,
+            matching_indices,
+            which_indices_to_loop_over,
+            test_point,
+            runtime_tracker,
+        )
+    }
+}
+
 impl CompiledQueryAtom for LasQueryAtomCompare<Position> {
     fn eval(
         &self,
@@ -502,92 +708,124 @@ impl CompiledQueryAtom for LasQueryAtomCompare<Classification> {
             .context("Could not access point data")?;
         let classifications = point_data.view_attribute::<u8>(&CLASSIFICATION);
 
-        match self.compare_expression {
-            CompareExpression::Equals => {
-                let test_point = |point_index: usize| -> Result<bool> {
-                    let classification = classifications.at(point_index);
-                    Ok(classification == self.value.0)
-                };
+        self.eval_primitive(
+            classifications,
+            self.value.0,
+            block,
+            matching_indices,
+            which_indices_to_loop_over,
+            runtime_tracker,
+        )
+    }
+}
 
-                eval_impl(
-                    block,
-                    matching_indices,
-                    which_indices_to_loop_over,
-                    test_point,
-                    runtime_tracker,
-                )
-            }
-            CompareExpression::NotEquals => {
-                let test_point = |point_index: usize| -> Result<bool> {
-                    let classification = classifications.at(point_index);
-                    Ok(classification != self.value.0)
-                };
-
-                eval_impl(
-                    block,
-                    matching_indices,
-                    which_indices_to_loop_over,
-                    test_point,
-                    runtime_tracker,
-                )
-            }
-            CompareExpression::LessThan => {
-                let test_point = |point_index: usize| -> Result<bool> {
-                    let classification = classifications.at(point_index);
-                    Ok(classification < self.value.0)
-                };
-
-                eval_impl(
-                    block,
-                    matching_indices,
-                    which_indices_to_loop_over,
-                    test_point,
-                    runtime_tracker,
-                )
-            }
-            CompareExpression::LessThanOrEquals => {
-                let test_point = |point_index: usize| -> Result<bool> {
-                    let classification = classifications.at(point_index);
-                    Ok(classification <= self.value.0)
-                };
-
-                eval_impl(
-                    block,
-                    matching_indices,
-                    which_indices_to_loop_over,
-                    test_point,
-                    runtime_tracker,
-                )
-            }
-            CompareExpression::GreaterThan => {
-                let test_point = |point_index: usize| -> Result<bool> {
-                    let classification = classifications.at(point_index);
-                    Ok(classification > self.value.0)
-                };
-
-                eval_impl(
-                    block,
-                    matching_indices,
-                    which_indices_to_loop_over,
-                    test_point,
-                    runtime_tracker,
-                )
-            }
-            CompareExpression::GreaterThanOrEquals => {
-                let test_point = |point_index: usize| -> Result<bool> {
-                    let classification = classifications.at(point_index);
-                    Ok(classification >= self.value.0)
-                };
-
-                eval_impl(
-                    block,
-                    matching_indices,
-                    which_indices_to_loop_over,
-                    test_point,
-                    runtime_tracker,
-                )
-            }
+impl CompiledQueryAtom for LasQueryAtomCompare<ReturnNumber> {
+    fn eval(
+        &self,
+        input_layer: &InputLayer,
+        block: PointRange,
+        dataset_id: DatasetID,
+        matching_indices: &'_ mut [bool],
+        which_indices_to_loop_over: super::WhichIndicesToLoopOver,
+        runtime_tracker: &BlockQueryRuntimeTracker,
+    ) -> Result<usize> {
+        let point_data = input_layer
+            .get_point_data(dataset_id, block.clone())
+            .context("Could not access point data")?;
+        if point_data
+            .point_layout()
+            .has_attribute(&ATTRIBUTE_BASIC_FLAGS)
+        {
+            let flags = point_data.view_attribute::<u8>(&ATTRIBUTE_BASIC_FLAGS);
+            self.eval_flags_primitive(
+                flags,
+                return_number_from_las_basic_flags,
+                self.value.0,
+                block,
+                matching_indices,
+                which_indices_to_loop_over,
+                runtime_tracker,
+            )
+        } else {
+            let extended_flags = point_data.view_attribute::<u16>(&ATTRIBUTE_EXTENDED_FLAGS);
+            self.eval_flags_primitive(
+                extended_flags,
+                return_number_from_las_extended_flags,
+                self.value.0,
+                block,
+                matching_indices,
+                which_indices_to_loop_over,
+                runtime_tracker,
+            )
         }
+    }
+}
+
+impl CompiledQueryAtom for LasQueryAtomCompare<NumberOfReturns> {
+    fn eval(
+        &self,
+        input_layer: &InputLayer,
+        block: PointRange,
+        dataset_id: DatasetID,
+        matching_indices: &'_ mut [bool],
+        which_indices_to_loop_over: super::WhichIndicesToLoopOver,
+        runtime_tracker: &BlockQueryRuntimeTracker,
+    ) -> Result<usize> {
+        let point_data = input_layer
+            .get_point_data(dataset_id, block.clone())
+            .context("Could not access point data")?;
+        if point_data
+            .point_layout()
+            .has_attribute(&ATTRIBUTE_BASIC_FLAGS)
+        {
+            let flags = point_data.view_attribute::<u8>(&ATTRIBUTE_BASIC_FLAGS);
+            self.eval_flags_primitive(
+                flags,
+                number_of_returns_from_las_basic_flags,
+                self.value.0,
+                block,
+                matching_indices,
+                which_indices_to_loop_over,
+                runtime_tracker,
+            )
+        } else {
+            let extended_flags = point_data.view_attribute::<u16>(&ATTRIBUTE_EXTENDED_FLAGS);
+            self.eval_flags_primitive(
+                extended_flags,
+                number_of_returns_from_las_extended_flags,
+                self.value.0,
+                block,
+                matching_indices,
+                which_indices_to_loop_over,
+                runtime_tracker,
+            )
+        }
+    }
+}
+
+impl CompiledQueryAtom for LasQueryAtomCompare<GpsTime> {
+    fn eval(
+        &self,
+        input_layer: &InputLayer,
+        block: PointRange,
+        dataset_id: DatasetID,
+        matching_indices: &'_ mut [bool],
+        which_indices_to_loop_over: super::WhichIndicesToLoopOver,
+        runtime_tracker: &BlockQueryRuntimeTracker,
+    ) -> Result<usize> {
+        let point_data = input_layer
+            .get_point_data(dataset_id, block.clone())
+            .context("Could not access point data")?;
+        let gps_times = point_data.view_attribute::<f64>(&GPS_TIME);
+
+        self.eval_primitive(
+            gps_times,
+            self.value.0,
+            block,
+            matching_indices,
+            which_indices_to_loop_over,
+            runtime_tracker,
+        )
     }
 }
 

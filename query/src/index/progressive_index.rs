@@ -17,6 +17,7 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use log::info;
+use pasture_core::layout::attributes::{GPS_TIME, NUMBER_OF_RETURNS, RETURN_NUMBER};
 use pasture_io::base::{GenericPointReader, PointReader};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
@@ -24,8 +25,6 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     ffi::OsStr,
-    fs::File,
-    io::BufWriter,
     path::{Path, PathBuf},
     sync::atomic::{AtomicUsize, Ordering},
     time::Instant,
@@ -176,6 +175,17 @@ impl ProgressiveIndex {
 
         // Query with index to get matching blocks, group the blocks by their file
         let rough_query_result = dataset.rough_query(&query);
+        // info!("Matching blocks:");
+        // for (file_index, ranges) in rough_query_result.matching_blocks.iter() {
+        //     for range in ranges {
+        //         info!(
+        //             "File {} - Points {:#?} - {:#?}",
+        //             dataset.files[*file_index].display(),
+        //             range.0.points_in_file,
+        //             range.1
+        //         );
+        //     }
+        // }
 
         let largest_block = dataset
             .indices
@@ -294,8 +304,9 @@ fn build_initial_block_indices<P: AsRef<Path>>(
 ) -> Result<(FxHashMap<ValueType, BlockIndex>, String)> {
     let common_extension =
         common_file_extension(files).context("Can't get common file extension")?;
-    let mut position_blocks = vec![];
-    let mut classification_blocks = vec![];
+
+    let mut blocks_per_value_type: HashMap<ValueType, Vec<Block>> = Default::default();
+
     for (file_id, file) in files.iter().enumerate() {
         let reader = GenericPointReader::open_file(file.as_ref()).context(format!(
             "Can't open file reader for file {}",
@@ -320,18 +331,65 @@ fn build_initial_block_indices<P: AsRef<Path>>(
         let mut block = Block::new(0..point_count, file_id);
         let position_index = PositionIndex::new(bounds);
         block.set_index(Box::new(position_index));
-        position_blocks.push(block);
+        if let Some(position_blocks) = blocks_per_value_type.get_mut(&ValueType::Position3D) {
+            position_blocks.push(block);
+        } else {
+            blocks_per_value_type.insert(ValueType::Position3D, vec![block]);
+        }
+
         // Can't create an initial index for classifications because there is no histogram within the header. So we use a block without
         // an index
-        classification_blocks.push(Block::new(0..point_count, file_id));
+        if let Some(classification_blocks) =
+            blocks_per_value_type.get_mut(&ValueType::Classification)
+        {
+            classification_blocks.push(Block::new(0..point_count, file_id));
+        } else {
+            blocks_per_value_type.insert(
+                ValueType::Classification,
+                vec![Block::new(0..point_count, file_id)],
+            );
+        }
+
+        // Add indices for other attributes
+        let point_layout = reader.get_default_point_layout();
+        if point_layout.has_attribute(&RETURN_NUMBER) {
+            if let Some(blocks) = blocks_per_value_type.get_mut(&ValueType::ReturnNumber) {
+                blocks.push(Block::new(0..point_count, file_id));
+            } else {
+                blocks_per_value_type.insert(
+                    ValueType::ReturnNumber,
+                    vec![Block::new(0..point_count, file_id)],
+                );
+            }
+        }
+
+        if point_layout.has_attribute(&NUMBER_OF_RETURNS) {
+            if let Some(blocks) = blocks_per_value_type.get_mut(&ValueType::NumberOfReturns) {
+                blocks.push(Block::new(0..point_count, file_id));
+            } else {
+                blocks_per_value_type.insert(
+                    ValueType::NumberOfReturns,
+                    vec![Block::new(0..point_count, file_id)],
+                );
+            }
+        }
+
+        if point_layout.has_attribute(&GPS_TIME) {
+            if let Some(blocks) = blocks_per_value_type.get_mut(&ValueType::GpsTime) {
+                blocks.push(Block::new(0..point_count, file_id));
+            } else {
+                blocks_per_value_type.insert(
+                    ValueType::GpsTime,
+                    vec![Block::new(0..point_count, file_id)],
+                );
+            }
+        }
     }
 
     let mut indices: FxHashMap<_, _> = Default::default();
-    indices.insert(ValueType::Position3D, BlockIndex::new(position_blocks));
-    indices.insert(
-        ValueType::Classification,
-        BlockIndex::new(classification_blocks),
-    );
+    for (value_type, blocks) in blocks_per_value_type {
+        indices.insert(value_type, BlockIndex::new(blocks));
+    }
 
     Ok((indices, common_extension.to_string_lossy().to_lowercase()))
 }

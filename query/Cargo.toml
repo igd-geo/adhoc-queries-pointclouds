@@ -18,7 +18,7 @@ lz4 = "1.23.2"
 pasture-core = { path = "/Users/pbormann/dev/proj_int/pasture/pasture-core" }
 pasture-io =  { path = "/Users/pbormann/dev/proj_int/pasture/pasture-io" }
 pasture-derive =   { path = "/Users/pbormann/dev/proj_int/pasture/pasture-derive" }
-readers = {path = "../readers"}
+io = {path = "../io"}
 statrs = "0.14.0"
 num_cpus = "1.13.0"
 rustc-hash = "1.1.0"
@@ -36,9 +36,11 @@ experiment-archiver = { git = "https://github.com/Mortano/experiment-archiver-rs
 bytemuck = {version = "1.13", features = ["derive"] }
 ouroboros = "0.17.2"
 geo = "0.26.0"
+shapefile = { version = "0.5.0", features = ["geo-types"] }
 
 [dev-dependencies]
 regex = "1"
+domus_viewer = { path = "/Users/pbormann/dev/proj_int/domusmaximus/domus_viewer" }
 
 [profile.release]
 debug = true

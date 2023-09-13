@@ -89,6 +89,9 @@ pub trait Index: Send + Sync {
 pub enum ValueType {
     Classification,
     Position3D,
+    ReturnNumber,
+    NumberOfReturns,
+    GpsTime,
 }
 
 impl Display for ValueType {
@@ -96,6 +99,9 @@ impl Display for ValueType {
         match self {
             Self::Classification => write!(f, "Classification"),
             Self::Position3D => write!(f, "Position3D"),
+            Self::GpsTime => write!(f, "GPS time"),
+            Self::ReturnNumber => write!(f, "Return number"),
+            Self::NumberOfReturns => write!(f, "Number of returns"),
         }
     }
 }
@@ -104,11 +110,24 @@ impl Display for ValueType {
 pub struct Position(pub Vector3<f64>);
 #[derive(Copy, Clone, Debug)]
 pub struct Classification(pub u8);
+#[derive(Copy, Clone, Debug)]
+pub struct ReturnNumber(pub u8);
+#[derive(Copy, Clone, Debug)]
+pub struct NumberOfReturns(pub u8);
+#[derive(Copy, Clone, Debug)]
+pub struct GpsTime(pub f64);
+
+// TODO LOD (discrete? continuous?)
 
 #[derive(Copy, Clone, Debug)]
 pub enum Value {
     Classification(Classification),
     Position(Position),
+    ReturnNumber(ReturnNumber),
+    NumberOfReturns(NumberOfReturns),
+    GpsTime(GpsTime),
+    // TODO Add something like 'DynamicValue' for values that are to be computed at runtime. The value has to refer
+    // to the ValueType of all the actual values that it requires for the computation
 }
 
 impl Value {
@@ -116,6 +135,9 @@ impl Value {
         match self {
             Value::Classification(_) => ValueType::Classification,
             Value::Position(_) => ValueType::Position3D,
+            Value::GpsTime(_) => ValueType::GpsTime,
+            Value::ReturnNumber(_) => ValueType::ReturnNumber,
+            Value::NumberOfReturns(_) => ValueType::NumberOfReturns,
         }
     }
 }
@@ -493,7 +515,8 @@ impl QueryExpression {
                         index.matches(atomic_expr, block.len())
                     })
                 } else {
-                    panic!("No index found for value type");
+                    // No index => Attribute(s) of query are not supported by file, so no matches
+                    BlockQueryResult::default()
                 }
             }
             QueryExpression::And(l_expr, r_expr) => {
