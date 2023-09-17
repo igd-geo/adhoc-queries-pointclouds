@@ -7,6 +7,9 @@ pub(crate) use self::las::*;
 mod last;
 pub(crate) use self::last::*;
 
+mod laz;
+pub(crate) use self::laz::*;
+
 mod input_layer;
 pub use self::input_layer::*;
 

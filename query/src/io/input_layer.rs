@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use log::info;
 use pasture_core::{
-    containers::{BorrowedBuffer, InterleavedBuffer, VectorBuffer},
+    containers::{BorrowedBuffer, HashMapBuffer, InterleavedBuffer, VectorBuffer},
     layout::PointLayout,
 };
 use pasture_io::las::{point_layout_from_las_metadata, LASMetadata, LASReader};
@@ -16,7 +16,7 @@ use std::{
 
 use crate::index::{DatasetID, PointRange};
 
-use super::{BorrowedLasPointData, LASPointDataReader};
+use super::{BorrowedLasPointData, LASPointDataReader, LASTPointDataReader, LAZPointDataReader};
 
 /// Handle to a file in the input layer. The file is uniquely identified by the ID of the dataset it belongs to,
 /// and by its index within that dataset
@@ -31,21 +31,24 @@ impl Display for FileHandle {
 
 pub enum PointData {
     MmappedLas(BorrowedLasPointData),
-    Owned(VectorBuffer),
+    OwnedInterleaved(VectorBuffer),
+    OwnedColumnar(HashMapBuffer),
 }
 
 impl<'a> BorrowedBuffer<'a> for PointData {
     fn len(&self) -> usize {
         match self {
             PointData::MmappedLas(borrowed) => borrowed.borrow_buffer_slice().len(),
-            PointData::Owned(buffer) => buffer.len(),
+            PointData::OwnedInterleaved(buffer) => buffer.len(),
+            PointData::OwnedColumnar(buffer) => buffer.len(),
         }
     }
 
     fn point_layout(&self) -> &PointLayout {
         match self {
             PointData::MmappedLas(borrowed) => borrowed.borrow_buffer_slice().point_layout(),
-            PointData::Owned(buffer) => buffer.point_layout(),
+            PointData::OwnedInterleaved(buffer) => buffer.point_layout(),
+            PointData::OwnedColumnar(buffer) => buffer.point_layout(),
         }
     }
 
@@ -54,7 +57,8 @@ impl<'a> BorrowedBuffer<'a> for PointData {
             PointData::MmappedLas(borrowed) => {
                 borrowed.borrow_buffer_slice().get_point(index, data)
             }
-            PointData::Owned(buffer) => buffer.get_point(index, data),
+            PointData::OwnedInterleaved(buffer) => buffer.get_point(index, data),
+            PointData::OwnedColumnar(buffer) => buffer.get_point(index, data),
         }
     }
 
@@ -63,7 +67,8 @@ impl<'a> BorrowedBuffer<'a> for PointData {
             PointData::MmappedLas(borrowed) => {
                 borrowed.borrow_buffer_slice().get_point_range(range, data)
             }
-            PointData::Owned(buffer) => buffer.get_point_range(range, data),
+            PointData::OwnedInterleaved(buffer) => buffer.get_point_range(range, data),
+            PointData::OwnedColumnar(buffer) => buffer.get_point_range(range, data),
         }
     }
 
@@ -77,7 +82,10 @@ impl<'a> BorrowedBuffer<'a> for PointData {
             PointData::MmappedLas(borrowed) => borrowed
                 .borrow_buffer_slice()
                 .get_attribute_unchecked(attribute_member, index, data),
-            PointData::Owned(buffer) => {
+            PointData::OwnedInterleaved(buffer) => {
+                buffer.get_attribute_unchecked(attribute_member, index, data)
+            }
+            PointData::OwnedColumnar(buffer) => {
                 buffer.get_attribute_unchecked(attribute_member, index, data)
             }
         }
@@ -91,7 +99,8 @@ impl<'a> InterleavedBuffer<'a> for PointData {
     {
         match self {
             PointData::MmappedLas(borrowed) => borrowed.borrow_buffer_slice().get_point_ref(index),
-            PointData::Owned(buffer) => buffer.get_point_ref(index),
+            PointData::OwnedInterleaved(buffer) => buffer.get_point_ref(index),
+            PointData::OwnedColumnar(_) => panic!("Unsupported operation"),
         }
     }
 
@@ -103,7 +112,8 @@ impl<'a> InterleavedBuffer<'a> for PointData {
             PointData::MmappedLas(borrowed) => {
                 borrowed.borrow_buffer_slice().get_point_range_ref(range)
             }
-            PointData::Owned(buffer) => buffer.get_point_range_ref(range),
+            PointData::OwnedInterleaved(buffer) => buffer.get_point_range_ref(range),
+            PointData::OwnedColumnar(_) => panic!("Unsupported operation"),
         }
     }
 }
@@ -125,6 +135,8 @@ pub(crate) trait PointDataLoader: Send + Sync {
     fn default_point_layout(&self) -> &PointLayout;
     /// Returns `true` if the underlying file format stores point positions in world space
     fn has_positions_in_world_space(&self) -> bool;
+    /// Does this `PointDataLoader` support returning borrowed data (e.g. using `mmap`)?
+    fn supports_borrowed_data(&self) -> bool;
 }
 
 /// Handles low-level data access and provides access to point data for the query layer
@@ -168,6 +180,19 @@ impl InputLayer {
             );
         }
         Ok(file_handles)
+    }
+
+    /// Does the input layer support returning borrowed point data for the given `point_range` within the given dataset?
+    /// If so, this enables optimizations in the query layer as we can safely view attributes of points without any copying
+    /// or parsing
+    pub fn can_get_borrowed_point_data(
+        &self,
+        dataset_id: DatasetID,
+        point_range: PointRange,
+    ) -> Result<bool> {
+        let file_handle = FileHandle(dataset_id, point_range.file_index);
+        self.get_or_create_loader(file_handle)
+            .map(|loader| loader.supports_borrowed_data())
     }
 
     /// Returns the data for the given `PointRange` in the given dataset
@@ -253,6 +278,10 @@ impl InputLayer {
 
         match file_extension {
             "las" | "LAS" => LASPointDataReader::new(path)
+                .map(|reader| -> Arc<dyn PointDataLoader> { Arc::new(reader) }),
+            "last" | "LAST" => LASTPointDataReader::new(path)
+                .map(|reader| -> Arc<dyn PointDataLoader> { Arc::new(reader) }),
+            "laz" | "LAZ" => LAZPointDataReader::new(path)
                 .map(|reader| -> Arc<dyn PointDataLoader> { Arc::new(reader) }),
             other => Err(anyhow!("Unsupported file extension {other}")),
         }

@@ -94,7 +94,7 @@ fn main() -> Result<()> {
     pretty_env_logger::init();
 
     let paths = get_point_files_in_path(Path::new(
-        "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/las",
+        "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/laz",
     ));
 
     let shapefile_path = Path::new(
@@ -135,12 +135,14 @@ fn main() -> Result<()> {
 
     // let output = NullOutput::default();
     let output = LASOutput::new(
-        "example_query_output_shape.las",
+        "example_query_output_shape_from_laz.las",
         &point_layout_from_las_point_format(&Format::new(0)?, false)?,
     )?;
     // let output = StdoutOutput::new(PointLayout::from_attributes(&[POSITION_3D, GPS_TIME]), true);
-    let stats =
-        progressive_index.query(dataset_id, shapefile_query, &NoRefinementStrategy, &output)?;
+
+    let query = shapefile_query;
+    eprintln!("Query: {query}");
+    let stats = progressive_index.query(dataset_id, query, &NoRefinementStrategy, &output)?;
 
     eprintln!("{}", stats);
 

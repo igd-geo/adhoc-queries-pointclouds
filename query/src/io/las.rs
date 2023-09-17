@@ -143,7 +143,7 @@ impl PointDataLoader for LASPointDataReader {
             }
             let source_slice = self.mapped_file.get_buffer_for_points(point_range);
             let converted_points = converter.convert::<VectorBuffer, _>(&source_slice);
-            Ok(PointData::Owned(converted_points))
+            Ok(PointData::OwnedInterleaved(converted_points))
         }
     }
 
@@ -157,6 +157,10 @@ impl PointDataLoader for LASPointDataReader {
 
     fn has_positions_in_world_space(&self) -> bool {
         false
+    }
+
+    fn supports_borrowed_data(&self) -> bool {
+        true
     }
 }
 

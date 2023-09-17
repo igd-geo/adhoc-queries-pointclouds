@@ -5,6 +5,8 @@ use std::{
     ops::Range,
 };
 
+use geo::LineString;
+use itertools::Itertools;
 use pasture_core::nalgebra::Vector3;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
@@ -138,6 +140,24 @@ impl Value {
             Value::GpsTime(_) => ValueType::GpsTime,
             Value::ReturnNumber(_) => ValueType::ReturnNumber,
             Value::NumberOfReturns(_) => ValueType::NumberOfReturns,
+        }
+    }
+}
+
+impl Display for Value {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Value::Classification(classification) => {
+                write!(f, "Classification({})", classification.0)
+            }
+            Value::Position(position) => write!(
+                f,
+                "Position({};{};{})",
+                position.0.x, position.0.y, position.0.z
+            ),
+            Value::ReturnNumber(return_number) => write!(f, "ReturnNumber({})", return_number.0),
+            Value::NumberOfReturns(nr_returns) => write!(f, "NumberOfReturns({})", nr_returns.0),
+            Value::GpsTime(gps_time) => write!(f, "GPSTime({})", gps_time.0),
         }
     }
 }
@@ -476,9 +496,49 @@ pub enum CompareExpression {
     GreaterThanOrEquals,
 }
 
+impl Display for CompareExpression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            CompareExpression::Equals => write!(f, "=="),
+            CompareExpression::NotEquals => write!(f, "!="),
+            CompareExpression::LessThan => write!(f, "<"),
+            CompareExpression::LessThanOrEquals => write!(f, "<="),
+            CompareExpression::GreaterThan => write!(f, ">"),
+            CompareExpression::GreaterThanOrEquals => write!(f, ">="),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub enum Geometry {
     Polygon(geo::Polygon),
+}
+
+impl Display for Geometry {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Geometry::Polygon(polygon) => {
+                let pretty_format_linestring = |line_str: &LineString| -> String {
+                    line_str
+                        .coords()
+                        .map(|coord| format!("({},{})", coord.x, coord.y))
+                        .join(",")
+                };
+                let exterior_str = pretty_format_linestring(polygon.exterior());
+                let interior_str = polygon
+                    .interiors()
+                    .iter()
+                    .map(|line_str| format!("[{}]", pretty_format_linestring(line_str)))
+                    .join(";");
+
+                write!(
+                    f,
+                    "Polygon(Exterior: {};Interiors:[{}])",
+                    exterior_str, interior_str
+                )
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -494,6 +554,22 @@ impl AtomicExpression {
             AtomicExpression::Compare((_, value)) => value.value_type(),
             AtomicExpression::Intersects(_) => ValueType::Position3D,
             AtomicExpression::Within(range) => range.start.value_type(),
+        }
+    }
+}
+
+impl Display for AtomicExpression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            AtomicExpression::Compare((expr, value)) => {
+                write!(f, "{} {expr} {value}", value.value_type())
+            }
+            AtomicExpression::Intersects(geometry) => {
+                write!(f, "INTERSECTS({geometry})")
+            }
+            AtomicExpression::Within(range) => {
+                write!(f, "WITHIN({};{})", range.start, range.end)
+            }
         }
     }
 }
@@ -549,6 +625,16 @@ impl QueryExpression {
                 let r_indices = r.required_indices();
                 l_indices.union(&r_indices).copied().collect()
             }
+        }
+    }
+}
+
+impl Display for QueryExpression {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            QueryExpression::Atomic(atom) => write!(f, "{atom}"),
+            QueryExpression::And(left, right) => write!(f, "{left} AND {right}"),
+            QueryExpression::Or(left, right) => write!(f, "{left} OR {right}"),
         }
     }
 }

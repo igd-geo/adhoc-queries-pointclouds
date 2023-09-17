@@ -3,8 +3,8 @@ use crate::{
         Classification, CompareExpression, DatasetID, Geometry, GpsTime, NumberOfReturns,
         PointRange, Position, ReturnNumber,
     },
-    io::{FileHandle, InputLayer},
-    stats::{BlockQueryRuntimeTracker, BlockQueryRuntimeType},
+    io::{FileHandle, InputLayer, PointData},
+    stats::BlockQueryRuntimeTracker,
 };
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{LittleEndian, ReadBytesExt};
@@ -13,8 +13,8 @@ use geo::{coord, Contains, LineString, Polygon};
 use pasture_core::{
     containers::{AttributeView, BorrowedBuffer},
     layout::{
-        attributes::{CLASSIFICATION, GPS_TIME, POSITION_3D},
-        PointAttributeDataType, PrimitiveType,
+        attributes::{CLASSIFICATION, GPS_TIME, NUMBER_OF_RETURNS, POSITION_3D, RETURN_NUMBER},
+        PointAttributeDataType, PointAttributeDefinition, PointLayout, PrimitiveType,
     },
     math::AABB,
     nalgebra::{clamp, Point3, Vector3},
@@ -23,11 +23,11 @@ use pasture_io::{
     las::{ATTRIBUTE_BASIC_FLAGS, ATTRIBUTE_EXTENDED_FLAGS},
     las_rs::{raw, Transform, Vector},
 };
+use std::io::SeekFrom;
 use std::io::{Cursor, Seek};
 use std::ops::Range;
-use std::{io::SeekFrom, time::Instant};
 
-use super::CompiledQueryAtom;
+use super::{eval_impl, CompiledQueryAtom};
 
 /// Convert a world-space position into the local integer-value space of the given LAS file using the offset and scale parameters in the header.
 /// If the position is outside the representable range, i32::MIN/i32::MAX values are returned instead
@@ -42,18 +42,6 @@ pub(crate) fn to_local_integer_position(
         clamp(local_x, i32::MIN as f64, i32::MAX as f64) as i32,
         clamp(local_y, i32::MIN as f64, i32::MAX as f64) as i32,
         clamp(local_z, i32::MIN as f64, i32::MAX as f64) as i32,
-    )
-}
-
-/// Convert from a position in local space to a world space using the given LAS file header
-pub(crate) fn to_world_space_position(
-    position_local: &Vector3<i32>,
-    las_header: &raw::Header,
-) -> Vector3<f64> {
-    Vector3::new(
-        (position_local.x as f64 * las_header.x_scale_factor) + las_header.x_offset,
-        (position_local.y as f64 * las_header.y_scale_factor) + las_header.y_offset,
-        (position_local.z as f64 * las_header.z_scale_factor) + las_header.z_offset,
     )
 }
 
@@ -147,6 +135,45 @@ fn number_of_returns_from_las_basic_flags(flags: u8) -> u8 {
 
 fn number_of_returns_from_las_extended_flags(flags: u16) -> u8 {
     ((flags >> 4) & 0b1111) as u8
+}
+
+/// Returns data from the input layer for the given point range that contains at least the given `attribute`. The input layer
+/// might decide to return point data containing more attributes, if this is more efficient, for example because the underlying
+/// file might be mapped into memory as is the case for LAS files
+fn get_data_with_at_least_attribute(
+    attribute: &PointAttributeDefinition,
+    input_layer: &InputLayer,
+    dataset_id: DatasetID,
+    block: PointRange,
+) -> Result<PointData> {
+    let default_layout =
+        input_layer.get_default_point_layout_of_file(FileHandle(dataset_id, block.file_index))?;
+    // Queries might use higher-level attributes such as RETURN_NUMBER that are stored in bitfields inside the LAS family
+    // of files, so we have to perform an appropriate mapping
+    let is_extended_format = default_layout.has_attribute(&ATTRIBUTE_EXTENDED_FLAGS);
+    let native_attribute = if *attribute == RETURN_NUMBER || *attribute == NUMBER_OF_RETURNS {
+        if is_extended_format {
+            ATTRIBUTE_EXTENDED_FLAGS
+        } else {
+            ATTRIBUTE_BASIC_FLAGS
+        }
+    } else {
+        attribute.clone()
+    };
+
+    if input_layer.can_get_borrowed_point_data(dataset_id, block.clone())? {
+        input_layer
+            .get_point_data(dataset_id, block.clone())
+            .context("Could not access point data")
+    } else {
+        let custom_layout = PointLayout::from_attributes(&[native_attribute]);
+        input_layer.get_point_data_in_layout(
+            dataset_id,
+            block.clone(),
+            &custom_layout,
+            false, //LAS family of files never uses positions in world space
+        )
+    }
 }
 
 /// Implementation of the 'Within' query for LAS files
@@ -375,60 +402,6 @@ impl<T> LasQueryAtomCompare<T> {
     }
 }
 
-fn eval_impl<F: FnMut(usize) -> Result<bool>>(
-    block: PointRange,
-    matching_indices: &'_ mut [bool],
-    which_indices_to_loop_over: super::WhichIndicesToLoopOver,
-    mut test_point: F,
-    runtime_tracker: &BlockQueryRuntimeTracker,
-) -> Result<usize> {
-    let timer = Instant::now();
-
-    let mut num_matches = 0;
-    match which_indices_to_loop_over {
-        super::WhichIndicesToLoopOver::All => {
-            assert!(block.points_in_file.len() <= matching_indices.len());
-            for point_index in block.points_in_file.clone() {
-                let local_index = point_index - block.points_in_file.start;
-                matching_indices[local_index] = test_point(point_index)?;
-                if matching_indices[local_index] {
-                    num_matches += 1;
-                }
-            }
-        }
-        super::WhichIndicesToLoopOver::Matching => {
-            for (local_index, is_match) in matching_indices
-                .iter_mut()
-                .enumerate()
-                .filter(|(_, is_match)| **is_match)
-            {
-                let point_index = local_index + block.points_in_file.start;
-                *is_match = test_point(point_index)?;
-                if *is_match {
-                    num_matches += 1;
-                }
-            }
-        }
-        super::WhichIndicesToLoopOver::NotMatching => {
-            for (local_index, is_match) in matching_indices
-                .iter_mut()
-                .enumerate()
-                .filter(|(_, is_match)| !**is_match)
-            {
-                let point_index = local_index + block.points_in_file.start;
-                *is_match = test_point(point_index)?;
-                if *is_match {
-                    num_matches += 1;
-                }
-            }
-        }
-    }
-
-    runtime_tracker.log_runtime(block, BlockQueryRuntimeType::Eval, timer.elapsed());
-
-    Ok(num_matches)
-}
-
 impl CompiledQueryAtom for LasQueryAtomWithin<Position> {
     fn eval(
         &self,
@@ -450,9 +423,14 @@ impl CompiledQueryAtom for LasQueryAtomWithin<Position> {
         let local_bounds = AABB::from_min_max(local_min.into(), local_max.into());
 
         // We can access the raw position data using a pasture `AttributeView`
-        let point_data = input_layer
-            .get_point_data(dataset_id, block.clone())
-            .context("Could not access point data")?;
+        let local_position_attribute =
+            POSITION_3D.with_custom_datatype(PointAttributeDataType::Vec3i32);
+        let point_data = get_data_with_at_least_attribute(
+            &local_position_attribute,
+            input_layer,
+            dataset_id,
+            block.clone(),
+        )?;
         let positions = point_data.view_attribute::<Vector3<i32>>(
             &POSITION_3D.with_custom_datatype(PointAttributeDataType::Vec3i32),
         );
@@ -482,9 +460,12 @@ impl CompiledQueryAtom for LasQueryAtomWithin<Classification> {
         which_indices_to_loop_over: super::WhichIndicesToLoopOver,
         runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<usize> {
-        let point_data = input_layer
-            .get_point_data(dataset_id, block.clone())
-            .context("Could not access point data")?;
+        let point_data = get_data_with_at_least_attribute(
+            &CLASSIFICATION,
+            input_layer,
+            dataset_id,
+            block.clone(),
+        )?;
         let classifications = point_data.view_attribute::<u8>(&CLASSIFICATION);
 
         let test_point = |point_index: usize| -> Result<bool> {
@@ -512,10 +493,16 @@ impl CompiledQueryAtom for LasQueryAtomWithin<ReturnNumber> {
         which_indices_to_loop_over: super::WhichIndicesToLoopOver,
         runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<usize> {
-        let point_data = input_layer
-            .get_point_data(dataset_id, block.clone())
-            .context("Could not access point data")?;
-        // Since we are working with raw LAS files, we can't access the bit-flag attributes separately and instead
+        // The bit flag attributes are a bit different, we ask for the high-level attribute (i.e. RETURN_NUMBER)
+        // but the `PointData` will still contain the low-level flag attribute (e.g. ATTRIBUTE_BASIC_FLAGS)
+        let point_data = get_data_with_at_least_attribute(
+            &RETURN_NUMBER,
+            input_layer,
+            dataset_id,
+            block.clone(),
+        )?;
+
+        // Since we are working with raw LAS-like files, we can't access the bit-flag attributes separately and instead
         // have to use either `ATTRIBUTE_BASIC_FLAGS` or `ATTRIBUTE_EXTENDED_FLAGS`
         if point_data
             .point_layout()
@@ -564,9 +551,15 @@ impl CompiledQueryAtom for LasQueryAtomWithin<NumberOfReturns> {
         which_indices_to_loop_over: super::WhichIndicesToLoopOver,
         runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<usize> {
-        let point_data = input_layer
-            .get_point_data(dataset_id, block.clone())
-            .context("Could not access point data")?;
+        // The bit flag attributes are a bit different, we ask for the high-level attribute (i.e. NUMBER_OF_RETURNS)
+        // but the `PointData` will still contain the low-level flag attribute (e.g. ATTRIBUTE_BASIC_FLAGS)
+        let point_data = get_data_with_at_least_attribute(
+            &NUMBER_OF_RETURNS,
+            input_layer,
+            dataset_id,
+            block.clone(),
+        )?;
+
         if point_data
             .point_layout()
             .has_attribute(&ATTRIBUTE_BASIC_FLAGS)
@@ -614,9 +607,8 @@ impl CompiledQueryAtom for LasQueryAtomWithin<GpsTime> {
         which_indices_to_loop_over: super::WhichIndicesToLoopOver,
         runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<usize> {
-        let point_data = input_layer
-            .get_point_data(dataset_id, block.clone())
-            .context("Could not access point data")?;
+        let point_data =
+            get_data_with_at_least_attribute(&GPS_TIME, input_layer, dataset_id, block.clone())?;
         let gps_times = point_data.view_attribute::<f64>(&GPS_TIME);
 
         let test_point = |point_index: usize| -> Result<bool> {
@@ -652,12 +644,15 @@ impl CompiledQueryAtom for LasQueryAtomCompare<Position> {
         let local_position = to_local_integer_position(&self.value.0, las_transforms);
 
         // We can access the raw position data using a pasture `AttributeView`
-        let point_data = input_layer
-            .get_point_data(dataset_id, block.clone())
-            .context("Could not access point data")?;
-        let positions = point_data.view_attribute::<Vector3<i32>>(
-            &POSITION_3D.with_custom_datatype(PointAttributeDataType::Vec3i32),
-        );
+        let local_position_attribute =
+            POSITION_3D.with_custom_datatype(PointAttributeDataType::Vec3i32);
+        let point_data = get_data_with_at_least_attribute(
+            &local_position_attribute,
+            input_layer,
+            dataset_id,
+            block.clone(),
+        )?;
+        let positions = point_data.view_attribute::<Vector3<i32>>(&local_position_attribute);
 
         match self.compare_expression {
             CompareExpression::Equals => {
@@ -703,9 +698,12 @@ impl CompiledQueryAtom for LasQueryAtomCompare<Classification> {
         which_indices_to_loop_over: super::WhichIndicesToLoopOver,
         runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<usize> {
-        let point_data = input_layer
-            .get_point_data(dataset_id, block.clone())
-            .context("Could not access point data")?;
+        let point_data = get_data_with_at_least_attribute(
+            &CLASSIFICATION,
+            input_layer,
+            dataset_id,
+            block.clone(),
+        )?;
         let classifications = point_data.view_attribute::<u8>(&CLASSIFICATION);
 
         self.eval_primitive(
@@ -729,9 +727,15 @@ impl CompiledQueryAtom for LasQueryAtomCompare<ReturnNumber> {
         which_indices_to_loop_over: super::WhichIndicesToLoopOver,
         runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<usize> {
-        let point_data = input_layer
-            .get_point_data(dataset_id, block.clone())
-            .context("Could not access point data")?;
+        // The bit flag attributes are a bit different, we ask for the high-level attribute (i.e. RETURN_NUMBER)
+        // but the `PointData` will still contain the low-level flag attribute (e.g. ATTRIBUTE_BASIC_FLAGS)
+        let point_data = get_data_with_at_least_attribute(
+            &RETURN_NUMBER,
+            input_layer,
+            dataset_id,
+            block.clone(),
+        )?;
+
         if point_data
             .point_layout()
             .has_attribute(&ATTRIBUTE_BASIC_FLAGS)
@@ -771,9 +775,15 @@ impl CompiledQueryAtom for LasQueryAtomCompare<NumberOfReturns> {
         which_indices_to_loop_over: super::WhichIndicesToLoopOver,
         runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<usize> {
-        let point_data = input_layer
-            .get_point_data(dataset_id, block.clone())
-            .context("Could not access point data")?;
+        // The bit flag attributes are a bit different, we ask for the high-level attribute (i.e. NUMBER_OF_RETURNS)
+        // but the `PointData` will still contain the low-level flag attribute (e.g. ATTRIBUTE_BASIC_FLAGS)
+        let point_data = get_data_with_at_least_attribute(
+            &NUMBER_OF_RETURNS,
+            input_layer,
+            dataset_id,
+            block.clone(),
+        )?;
+
         if point_data
             .point_layout()
             .has_attribute(&ATTRIBUTE_BASIC_FLAGS)
@@ -813,9 +823,8 @@ impl CompiledQueryAtom for LasQueryAtomCompare<GpsTime> {
         which_indices_to_loop_over: super::WhichIndicesToLoopOver,
         runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<usize> {
-        let point_data = input_layer
-            .get_point_data(dataset_id, block.clone())
-            .context("Could not access point data")?;
+        let point_data =
+            get_data_with_at_least_attribute(&GPS_TIME, input_layer, dataset_id, block.clone())?;
         let gps_times = point_data.view_attribute::<f64>(&GPS_TIME);
 
         self.eval_primitive(
@@ -858,13 +867,16 @@ impl CompiledQueryAtom for LasQueryAtomIntersects {
             .transforms();
         let local_geometry = geometry_to_local_las_space(&self.geometry, las_transforms);
 
-        // We can access the raw position data using a pasture `AttributeView`
-        let point_data = input_layer
-            .get_point_data(dataset_id, block.clone())
-            .context("Could not access point data")?;
-        let positions = point_data.view_attribute::<Vector3<i32>>(
-            &POSITION_3D.with_custom_datatype(PointAttributeDataType::Vec3i32),
-        );
+        let local_position_attribute =
+            &POSITION_3D.with_custom_datatype(PointAttributeDataType::Vec3i32);
+        let point_data = get_data_with_at_least_attribute(
+            &local_position_attribute,
+            input_layer,
+            dataset_id,
+            block.clone(),
+        )?;
+
+        let positions = point_data.view_attribute::<Vector3<i32>>(local_position_attribute);
 
         match local_geometry {
             Geometry::Polygon(polygon) => {

@@ -2,8 +2,8 @@ use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 
 use anyhow::{bail, Context, Result};
 use pasture_core::{
-    containers::{BorrowedBuffer, ColumnarBuffer, HashMapBuffer, OwningBuffer},
-    layout::{conversion::BufferLayoutConverter, PointAttributeMember, PointLayout},
+    containers::{BorrowedBuffer, HashMapBuffer, OwningBuffer},
+    layout::{PointAttributeMember, PointLayout},
 };
 use pasture_io::{
     base::{PointReader, SeekToPoint},
@@ -12,6 +12,8 @@ use pasture_io::{
     },
     las_rs::{point::Format, raw::Header},
 };
+
+use crate::las_common::get_default_las_converter;
 
 /// Convert a LAS file to a LAST file
 pub fn las_to_last<R: Read + Seek + Send>(
@@ -24,7 +26,6 @@ pub fn las_to_last<R: Read + Seek + Send>(
     }
 
     let start_of_point_records = header.offset_to_point_data as usize;
-    let num_points = header.number_of_point_records as usize;
 
     // Copy all data before the point records into the LAST file
     {
@@ -191,10 +192,27 @@ impl<R: Read + Seek + Send> PointReader for LASTReader<R> {
             self.read_into_default_layout(&mut tmp_buffer, num_points_to_read)?;
 
             let target_layout = point_buffer.point_layout().clone();
-            let converter = BufferLayoutConverter::for_layouts_with_default(
+
+            if self.las_metadata.point_format().is_extended {
+                // TODO Converter currently doesn't support applying the transformation to the SOURCE attribute,
+                // which is a problem for extended formats, where the flags are u16, but the resulting types
+                // are u8. Since the transformation is applied AFTER conversion from u16 to u8, the necessary
+                // bytes for some of the flags are truncated...
+                bail!("LAST files with extended point record format currently unsupported");
+            }
+
+            let raw_las_header = self
+                .las_metadata
+                .raw_las_header()
+                .cloned()
+                .expect("No LAS header found")
+                .into_raw()?;
+            let converter = get_default_las_converter(
                 tmp_buffer.point_layout(),
                 &target_layout,
-            );
+                raw_las_header,
+            )
+            .context("Could not get a buffer layout converter for the target buffer")?;
             converter.convert_into(&tmp_buffer, point_buffer);
         }
 

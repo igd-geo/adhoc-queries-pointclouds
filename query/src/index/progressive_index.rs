@@ -17,8 +17,11 @@
 
 use anyhow::{anyhow, bail, Context, Result};
 use log::info;
-use pasture_core::layout::attributes::{GPS_TIME, NUMBER_OF_RETURNS, RETURN_NUMBER};
-use pasture_io::base::{GenericPointReader, PointReader};
+use pasture_core::{
+    layout::attributes::{GPS_TIME, NUMBER_OF_RETURNS, RETURN_NUMBER},
+    meta::Metadata,
+};
+use pasture_io::las::{ATTRIBUTE_BASIC_FLAGS, ATTRIBUTE_EXTENDED_FLAGS};
 use rayon::prelude::*;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
@@ -34,7 +37,7 @@ use super::{
     Block, BlockIndex, IndexResult, PointRange, PositionIndex, Query, RefinementStrategy, ValueType,
 };
 use crate::{
-    io::{InputLayer, PointOutput},
+    io::{FileHandle, InputLayer, PointOutput},
     search::{compile_query, WhichIndicesToLoopOver},
     stats::{BlockQueryRuntimeTracker, QueryStats},
 };
@@ -126,9 +129,15 @@ impl ProgressiveIndex {
     /// will build an initial, very rough block index
     pub fn add_dataset<'a, P: AsRef<Path>>(&mut self, files: &'a [P]) -> Result<DatasetID> {
         info!("Adding new dataset");
+
         let id = self.datasets.len();
-        let (indices, common_file_extension) = build_initial_block_indices(files)
-            .context("Failed do build initial index for dataset")?;
+        self.input_layer
+            .add_files(files, id)
+            .context("Failed to add files to input layer")?;
+
+        let (indices, common_file_extension) =
+            build_initial_block_indices(files, id, &self.input_layer)
+                .context("Failed do build initial index for dataset")?;
         self.datasets.insert(
             id,
             KnownDataset {
@@ -140,9 +149,6 @@ impl ProgressiveIndex {
                 common_file_extension,
             },
         );
-        self.input_layer
-            .add_files(files, id)
-            .context("Failed to add files to input layer")?;
         Ok(id)
     }
 
@@ -301,6 +307,8 @@ impl ProgressiveIndex {
 
 fn build_initial_block_indices<P: AsRef<Path>>(
     files: &'_ [P],
+    dataset_id: DatasetID,
+    input_layer: &InputLayer,
 ) -> Result<(FxHashMap<ValueType, BlockIndex>, String)> {
     let common_extension =
         common_file_extension(files).context("Can't get common file extension")?;
@@ -308,18 +316,18 @@ fn build_initial_block_indices<P: AsRef<Path>>(
     let mut blocks_per_value_type: HashMap<ValueType, Vec<Block>> = Default::default();
 
     for (file_id, file) in files.iter().enumerate() {
-        let reader = GenericPointReader::open_file(file.as_ref()).context(format!(
-            "Can't open file reader for file {}",
-            file.as_ref().display()
-        ))?;
-        let point_count = reader
-            .get_metadata()
+        let file_handle = FileHandle(dataset_id, file_id);
+        let las_metadata = input_layer.get_las_metadata(file_handle).ok_or_else(|| {
+            anyhow!(
+                "File {} is not a LAS-derivate, could not get metadata information",
+                file.as_ref().display()
+            )
+        })?;
+
+        let point_count = las_metadata
             .number_of_points()
             .ok_or(anyhow!("Can't determine number of points"))?;
-        let bounds = reader
-            .get_metadata()
-            .bounds()
-            .ok_or(anyhow!("Can't get bounds"))?;
+        let bounds = las_metadata.bounds().ok_or(anyhow!("Can't get bounds"))?;
         // let num_blocks = (point_count + INITIAL_BLOCK_SIZE - 1) / INITIAL_BLOCK_SIZE;
         // for block_idx in 0..num_blocks {
         //     let block_start = block_idx * INITIAL_BLOCK_SIZE;
@@ -351,8 +359,19 @@ fn build_initial_block_indices<P: AsRef<Path>>(
         }
 
         // Add indices for other attributes
-        let point_layout = reader.get_default_point_layout();
-        if point_layout.has_attribute(&RETURN_NUMBER) {
+        let point_layout = input_layer
+            .get_default_point_layout_of_file(file_handle)
+            .with_context(|| {
+                format!(
+                    "Could not determine default PointLayout for file {}",
+                    file.as_ref().display()
+                )
+            })?;
+        // Return numbers and number of returns might not be stored directly but as packed LAS flags
+        if point_layout.has_attribute(&RETURN_NUMBER)
+            || point_layout.has_attribute(&ATTRIBUTE_BASIC_FLAGS)
+            || point_layout.has_attribute(&ATTRIBUTE_EXTENDED_FLAGS)
+        {
             if let Some(blocks) = blocks_per_value_type.get_mut(&ValueType::ReturnNumber) {
                 blocks.push(Block::new(0..point_count, file_id));
             } else {
@@ -363,7 +382,10 @@ fn build_initial_block_indices<P: AsRef<Path>>(
             }
         }
 
-        if point_layout.has_attribute(&NUMBER_OF_RETURNS) {
+        if point_layout.has_attribute(&NUMBER_OF_RETURNS)
+            || point_layout.has_attribute(&ATTRIBUTE_BASIC_FLAGS)
+            || point_layout.has_attribute(&ATTRIBUTE_EXTENDED_FLAGS)
+        {
             if let Some(blocks) = blocks_per_value_type.get_mut(&ValueType::NumberOfReturns) {
                 blocks.push(Block::new(0..point_count, file_id));
             } else {

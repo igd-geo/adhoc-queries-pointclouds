@@ -18,6 +18,7 @@ lz4 = "1.23.2"
 pasture-core = { path = "/Users/pbormann/dev/proj_int/pasture/pasture-core" }
 pasture-io =  { path = "/Users/pbormann/dev/proj_int/pasture/pasture-io" }
 pasture-derive =   { path = "/Users/pbormann/dev/proj_int/pasture/pasture-derive" }
+laz = "0.8"
 io = {path = "../io"}
 statrs = "0.14.0"
 num_cpus = "1.13.0"
@@ -41,6 +42,7 @@ shapefile = { version = "0.5.0", features = ["geo-types"] }
 [dev-dependencies]
 regex = "1"
 domus_viewer = { path = "/Users/pbormann/dev/proj_int/domusmaximus/domus_viewer" }
+colored = "2.0.4"
 
 [profile.release]
 debug = true

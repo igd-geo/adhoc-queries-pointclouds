@@ -2,7 +2,10 @@ use std::{
     fs::File,
     io::{BufWriter, Write},
     path::Path,
-    sync::Mutex,
+    sync::{
+        atomic::{AtomicUsize, Ordering},
+        Mutex,
+    },
 };
 
 use anyhow::{Context, Result};
@@ -17,7 +20,7 @@ use pasture_io::{base::PointWriter, las::LASWriter};
 
 use crate::{
     index::{DatasetID, PointRange},
-    io::FileHandle,
+    io::{FileHandle, PointData},
 };
 
 use super::InputLayer;
@@ -81,32 +84,53 @@ impl PointOutput for StdoutOutput {
                 ))
         }?;
 
-        let points_range = memory.get_point_range_ref(point_range.points_in_file);
         let size_of_point = self.output_layout.size_of_point_entry() as usize;
 
-        let filtered_memory = points_range
-            .chunks_exact(size_of_point)
-            .enumerate()
-            .filter_map(|(idx, data)| {
-                if matching_indices[idx] {
-                    Some(data)
-                } else {
-                    None
+        // If the data is columnar, we can't range-copy, but the current PointData interface does not have this
+        // information. Indicates to me that the interface is flawed...
+        match memory {
+            PointData::OwnedColumnar(point_buffer) => {
+                let num_matches = matching_indices.iter().filter(|m| **m).count();
+                let mut interleaved_buffer = vec![0; num_matches * size_of_point];
+                for (index, point_chunk) in matching_indices
+                    .iter()
+                    .zip(interleaved_buffer.chunks_exact_mut(size_of_point))
+                    .enumerate()
+                    .filter_map(|(index, (is_match, chunk))| {
+                        if *is_match {
+                            Some((index, chunk))
+                        } else {
+                            None
+                        }
+                    })
+                {
+                    point_buffer.get_point(index, point_chunk);
                 }
-            })
-            .flatten()
-            .copied()
-            .collect::<Vec<_>>();
 
-        let mut stdout = std::io::stdout().lock();
-        stdout.write_all(&filtered_memory)?;
-        // for (_, point_memory) in points_range
-        //     .chunks_exact(size_of_point)
-        //     .enumerate()
-        //     .filter(|(idx, _)| matching_indices[*idx])
-        // {
-        //     stdout.write_all(point_memory)?;
-        // }
+                let mut stdout = std::io::stdout().lock();
+                stdout.write_all(&interleaved_buffer)?;
+            }
+            _ => {
+                let points_range = memory.get_point_range_ref(point_range.points_in_file);
+
+                let filtered_memory = points_range
+                    .chunks_exact(size_of_point)
+                    .enumerate()
+                    .filter_map(|(idx, data)| {
+                        if matching_indices[idx] {
+                            Some(data)
+                        } else {
+                            None
+                        }
+                    })
+                    .flatten()
+                    .copied()
+                    .collect::<Vec<_>>();
+
+                let mut stdout = std::io::stdout().lock();
+                stdout.write_all(&filtered_memory)?;
+            }
+        }
 
         Ok(())
     }
@@ -222,13 +246,16 @@ impl PointOutput for LASOutput {
         tmp_buffer.resize(num_matches);
         let mut current_point: usize = 0;
 
+        let mut single_point_buffer = vec![0; self.output_layout.size_of_point_entry() as usize];
+
         for (point_index, _) in matching_indices
             .iter()
             .enumerate()
             .filter(|(_, is_match)| **is_match)
         {
+            memory.get_point(point_index, &mut single_point_buffer);
             unsafe {
-                tmp_buffer.set_point(current_point, memory.get_point_ref(point_index));
+                tmp_buffer.set_point(current_point, &single_point_buffer);
             }
             current_point += 1;
         }
@@ -236,6 +263,32 @@ impl PointOutput for LASOutput {
         let mut writer = self.writer.lock().expect("Could not lock writer");
         writer.write(&tmp_buffer)?;
 
+        Ok(())
+    }
+}
+
+/// Point output that only counts the number of matches but outputs no actual data
+#[derive(Default)]
+pub struct CountOutput {
+    count: AtomicUsize,
+}
+
+impl CountOutput {
+    pub fn count(&self) -> usize {
+        self.count.load(Ordering::SeqCst)
+    }
+}
+
+impl PointOutput for CountOutput {
+    fn output(
+        &self,
+        _input_layer: &InputLayer,
+        _dataset_id: DatasetID,
+        _point_range: PointRange,
+        matching_indices: &[bool],
+    ) -> Result<()> {
+        let count = matching_indices.iter().filter(|b| **b).count();
+        self.count.fetch_add(count, Ordering::SeqCst);
         Ok(())
     }
 }
