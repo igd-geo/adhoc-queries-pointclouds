@@ -40,6 +40,7 @@ pub trait PointOutput: Send + Sync {
 pub struct StdoutOutput {
     output_layout: PointLayout,
     positions_in_world_space: bool,
+    bytes_output: AtomicUsize,
     // TODO Support interleaved and columnar output formats
 }
 
@@ -48,7 +49,13 @@ impl StdoutOutput {
         Self {
             output_layout,
             positions_in_world_space,
+            bytes_output: AtomicUsize::default(),
         }
+    }
+
+    /// Returns the total number of bytes that were written to `stdout`
+    pub fn bytes_output(&self) -> usize {
+        self.bytes_output.load(Ordering::SeqCst)
     }
 }
 
@@ -60,6 +67,8 @@ impl PointOutput for StdoutOutput {
         point_range: PointRange,
         matching_indices: &[bool],
     ) -> Result<()> {
+        let _span = tracy_client::span!("StdoutOutput::output");
+
         assert_eq!(point_range.points_in_file.len(), matching_indices.len());
         let file_point_layout = input_layer
             .get_default_point_layout_of_file(FileHandle(dataset_id, point_range.file_index))
@@ -109,6 +118,8 @@ impl PointOutput for StdoutOutput {
 
                 let mut stdout = std::io::stdout().lock();
                 stdout.write_all(&interleaved_buffer)?;
+                self.bytes_output
+                    .fetch_add(interleaved_buffer.len(), Ordering::SeqCst);
             }
             _ => {
                 let points_range = memory.get_point_range_ref(point_range.points_in_file);
@@ -129,6 +140,8 @@ impl PointOutput for StdoutOutput {
 
                 let mut stdout = std::io::stdout().lock();
                 stdout.write_all(&filtered_memory)?;
+                self.bytes_output
+                    .fetch_add(filtered_memory.len(), Ordering::SeqCst);
             }
         }
 

@@ -31,6 +31,8 @@ const DATASET_DOC_LAST_PATH: &str =
     "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/last";
 const DATASET_DOC_LAZ_PATH: &str =
     "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/laz";
+const DATASET_DOC_LAZER_PATH: &str =
+    "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/lazer";
 
 const DOC_SHAPEFILE_SMALL_WITH_HOLES_PATH: &str =
     "/Users/pbormann/data/projects/progressive_indexing/queries/doc_polygon_small_with_holes_1.shp";
@@ -350,6 +352,7 @@ fn assert_correctness_with_doc_dataset() -> Result<()> {
     let las_files = get_files_with_extension("las", DATASET_DOC_LAS_PATH);
     let last_files = get_files_with_extension("last", DATASET_DOC_LAST_PATH);
     let laz_files = get_files_with_extension("laz", DATASET_DOC_LAZ_PATH);
+    let lazer_files = get_files_with_extension("lazer", DATASET_DOC_LAZER_PATH);
 
     struct ReportEntry {
         file_format: &'static str,
@@ -362,9 +365,10 @@ fn assert_correctness_with_doc_dataset() -> Result<()> {
         let query_clone = query.clone();
         let expected_num_matches = apply_query_to_las_dataset(&query, &las_files)?;
         let report_entries = [
-            (las_files.as_slice(), "las"),
+            // (las_files.as_slice(), "las"),
             (last_files.as_slice(), "last"),
-            (laz_files.as_slice(), "laz"),
+            // (laz_files.as_slice(), "laz"),
+            // (lazer_files.as_slice(), "lazer"),
         ]
         .into_par_iter()
         .map(move |(files, extension)| -> Result<ReportEntry> {
@@ -412,5 +416,6 @@ fn assert_correctness_with_doc_dataset() -> Result<()> {
 }
 
 fn main() -> Result<()> {
+    let _client = tracy_client::Client::start();
     assert_correctness_with_doc_dataset()
 }

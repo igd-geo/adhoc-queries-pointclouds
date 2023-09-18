@@ -65,52 +65,62 @@ impl PointDataLoader for LASTPointDataReader {
         target_layout: &pasture_core::layout::PointLayout,
         positions_in_world_space: bool,
     ) -> Result<PointData> {
+        let _span = tracy_client::span!("LAST::get_point_data");
+        if positions_in_world_space && !target_layout.has_attribute(&POSITION_3D) {
+            bail!("If positions_in_world_space is set, the target PointLayout must have the default POSITION_3D attribute");
+        }
+
         let mut last_reader = LASTReader::from_read(Cursor::new(&self.mmap[..]))?;
         last_reader.seek_point(SeekFrom::Start(point_range.start as u64))?;
 
-        if *target_layout == self.default_point_layout && !positions_in_world_space {
-            let points = last_reader.read::<HashMapBuffer>(point_range.len())?;
-            Ok(PointData::OwnedColumnar(points))
-        } else {
-            let mut converter = BufferLayoutConverter::for_layouts_with_default(
-                self.default_point_layout(),
-                target_layout,
-            );
-            // By default, LAS positions are in local space, but we might want them in world space, especially if the
-            // dataset contains multiple files. This requires the output PointLayout to have a POSITION_3D attribute!
-            if positions_in_world_space {
-                let source_positions_attribute =
-                    POSITION_3D.with_custom_datatype(PointAttributeDataType::Vec3i32);
-                let target_positions_attribute = target_layout
-                    .get_attribute_by_name(POSITION_3D.name())
-                    .ok_or(anyhow!("No POSITION_3D attribute found in target layout"))?;
-                if target_positions_attribute.datatype() != PointAttributeDataType::Vec3f64 {
-                    bail!("Outputting positions in world space is only possible if the POSITION_3D attribute of the output layout has datatype Vec3f64!");
-                }
+        // TODO Support for borrowed columnar data
+        let mut buffer = HashMapBuffer::with_capacity(point_range.len(), target_layout.clone());
+        last_reader.read_into(&mut buffer, point_range.len())?;
+        Ok(PointData::OwnedColumnar(buffer))
 
-                let transforms = *self
-                    .las_metadata
-                    .raw_las_header()
-                    .ok_or(anyhow!("Could not get LAS header"))?
-                    .transforms();
+        // if *target_layout == self.default_point_layout && !positions_in_world_space {
+        //     let points = last_reader.read::<HashMapBuffer>(point_range.len())?;
+        //     Ok(PointData::OwnedColumnar(points))
+        // } else {
+        //     let mut converter = BufferLayoutConverter::for_layouts_with_default(
+        //         self.default_point_layout(),
+        //         target_layout,
+        //     );
+        //     // By default, LAS positions are in local space, but we might want them in world space, especially if the
+        //     // dataset contains multiple files. This requires the output PointLayout to have a POSITION_3D attribute!
+        //     if positions_in_world_space {
+        //         let source_positions_attribute =
+        //             POSITION_3D.with_custom_datatype(PointAttributeDataType::Vec3i32);
+        //         let target_positions_attribute = target_layout
+        //             .get_attribute_by_name(POSITION_3D.name())
+        //             .ok_or(anyhow!("No POSITION_3D attribute found in target layout"))?;
+        //         if target_positions_attribute.datatype() != PointAttributeDataType::Vec3f64 {
+        //             bail!("Outputting positions in world space is only possible if the POSITION_3D attribute of the output layout has datatype Vec3f64!");
+        //         }
 
-                converter.set_custom_mapping_with_transformation(
-                    &source_positions_attribute,
-                    target_positions_attribute.attribute_definition(),
-                    move |position: Vector3<f64>| -> Vector3<f64> {
-                        Vector3::new(
-                            position.x * transforms.x.scale + transforms.x.offset,
-                            position.y * transforms.y.scale + transforms.y.offset,
-                            position.z * transforms.z.scale + transforms.z.offset,
-                        )
-                    },
-                );
-            }
+        //         let transforms = *self
+        //             .las_metadata
+        //             .raw_las_header()
+        //             .ok_or(anyhow!("Could not get LAS header"))?
+        //             .transforms();
 
-            let source_points = last_reader.read::<HashMapBuffer>(point_range.len())?;
-            let converted_points = converter.convert::<HashMapBuffer, _>(&source_points);
-            Ok(PointData::OwnedColumnar(converted_points))
-        }
+        //         converter.set_custom_mapping_with_transformation(
+        //             &source_positions_attribute,
+        //             target_positions_attribute.attribute_definition(),
+        //             move |position: Vector3<f64>| -> Vector3<f64> {
+        //                 Vector3::new(
+        //                     position.x * transforms.x.scale + transforms.x.offset,
+        //                     position.y * transforms.y.scale + transforms.y.offset,
+        //                     position.z * transforms.z.scale + transforms.z.offset,
+        //                 )
+        //             },
+        //         );
+        //     }
+
+        //     let source_points = last_reader.read::<HashMapBuffer>(point_range.len())?;
+        //     let converted_points = converter.convert::<HashMapBuffer, _>(&source_points);
+        //     Ok(PointData::OwnedColumnar(converted_points))
+        // }
     }
 
     fn mem_size(&self) -> usize {

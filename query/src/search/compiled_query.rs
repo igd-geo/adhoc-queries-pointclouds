@@ -1,6 +1,7 @@
 use std::time::Instant;
 
 use anyhow::{bail, Result};
+use pasture_core::layout::PrimitiveType;
 
 use crate::{
     index::{AtomicExpression, DatasetID, PointRange, QueryExpression, Value},
@@ -52,6 +53,8 @@ impl CompiledQueryExpression {
         which_indices: WhichIndicesToLoopOver,
         runtime_tracker: &BlockQueryRuntimeTracker,
     ) -> Result<usize> {
+        let _span = tracy_client::span!("eval_compiled_query");
+
         match self {
             CompiledQueryExpression::Atom(atom) => atom.eval(
                 input_layer,
@@ -139,8 +142,9 @@ pub(crate) fn compile_query(
 ) -> Result<CompiledQueryExpression> {
     match query {
         QueryExpression::Atomic(atomic_expr) => match file_format {
-            // TODO It seems to me that the implementation of querying LAS and querying LAST should be equivalent?
-            "las" | "last" | "laz" => match atomic_expr {
+            // TODO All LAS derivates seem to have identical implementations for their compiled queries? Maybe rename them
+            // as such!
+            "las" | "last" | "laz" | "lazer" => match atomic_expr {
                 AtomicExpression::Within(range) => {
                     let las_expr: Box<dyn CompiledQueryAtom> = match (range.start, range.end) {
                         // TODO How can I match on 'both enums have the same type'?
@@ -210,11 +214,12 @@ pub(crate) fn compile_query(
     }
 }
 
-pub(crate) fn eval_impl<F: FnMut(usize) -> Result<bool>>(
+pub(crate) fn eval_impl<F: FnMut(U) -> Result<bool>, U: PrimitiveType>(
     block: PointRange,
     matching_indices: &'_ mut [bool],
     which_indices_to_loop_over: super::WhichIndicesToLoopOver,
     mut test_point: F,
+    point_data: impl Iterator<Item = U>,
     runtime_tracker: &BlockQueryRuntimeTracker,
 ) -> Result<usize> {
     let timer = Instant::now();
@@ -223,36 +228,59 @@ pub(crate) fn eval_impl<F: FnMut(usize) -> Result<bool>>(
     match which_indices_to_loop_over {
         super::WhichIndicesToLoopOver::All => {
             assert!(block.points_in_file.len() <= matching_indices.len());
-            for point_index in block.points_in_file.clone() {
-                let local_index = point_index - block.points_in_file.start;
-                matching_indices[local_index] = test_point(point_index)?;
-                if matching_indices[local_index] {
+            for (point_data, index_matches) in point_data
+                .skip(block.points_in_file.start)
+                .zip(matching_indices.iter_mut())
+                .take(block.points_in_file.len())
+            {
+                *index_matches = test_point(point_data)?;
+                if *index_matches {
                     num_matches += 1;
                 }
             }
+
+            // for point_index in block.points_in_file.clone() {
+            //     let local_index = point_index - block.points_in_file.start;
+            //     matching_indices[local_index] = test_point(point_index)?;
+            //     if matching_indices[local_index] {
+            //         num_matches += 1;
+            //     }
+            // }
         }
         super::WhichIndicesToLoopOver::Matching => {
-            for (local_index, is_match) in matching_indices
-                .iter_mut()
-                .enumerate()
+            for (point_data, index_matches) in point_data
+                .skip(block.points_in_file.start)
+                .zip(matching_indices.iter_mut())
+                .take(block.points_in_file.len())
                 .filter(|(_, is_match)| **is_match)
             {
-                let point_index = local_index + block.points_in_file.start;
-                *is_match = test_point(point_index)?;
-                if *is_match {
+                *index_matches = test_point(point_data)?;
+                if *index_matches {
                     num_matches += 1;
                 }
             }
+
+            // for (local_index, is_match) in matching_indices
+            //     .iter_mut()
+            //     .enumerate()
+            //     .filter(|(_, is_match)| **is_match)
+            // {
+            //     let point_index = local_index + block.points_in_file.start;
+            //     *is_match = test_point(point_index)?;
+            //     if *is_match {
+            //         num_matches += 1;
+            //     }
+            // }
         }
         super::WhichIndicesToLoopOver::NotMatching => {
-            for (local_index, is_match) in matching_indices
-                .iter_mut()
-                .enumerate()
+            for (point_data, index_matches) in point_data
+                .skip(block.points_in_file.start)
+                .zip(matching_indices.iter_mut())
+                .take(block.points_in_file.len())
                 .filter(|(_, is_match)| !**is_match)
             {
-                let point_index = local_index + block.points_in_file.start;
-                *is_match = test_point(point_index)?;
-                if *is_match {
+                *index_matches = test_point(point_data)?;
+                if *index_matches {
                     num_matches += 1;
                 }
             }

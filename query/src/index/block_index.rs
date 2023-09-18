@@ -111,6 +111,8 @@ impl PositionIndex {
 #[typetag::serde]
 impl Index for PositionIndex {
     fn matches(&self, atomic_expr: &AtomicExpression, _num_points_in_block: usize) -> IndexResult {
+        let _span = tracy_client::span!("PositionIndex::matches");
+
         match atomic_expr {
             AtomicExpression::Within(range) => {
                 match (range.start, range.end) {
@@ -215,6 +217,8 @@ impl Index for ClassificationIndex {
         atomic_expression: &AtomicExpression,
         num_points_in_block: usize,
     ) -> IndexResult {
+        let _span = tracy_client::span!("ClassificationIndex::matches");
+
         match atomic_expression {
             AtomicExpression::Compare((compare_expr, value)) => {
                 match value {

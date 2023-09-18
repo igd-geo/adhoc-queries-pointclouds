@@ -1,11 +1,14 @@
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use anyhow::{bail, Context, Result};
 use geo::{line_string, MultiPolygon, Polygon};
 use pasture_core::{
     layout::{
-        attributes::{GPS_TIME, POSITION_3D},
-        PointLayout,
+        attributes::{CLASSIFICATION, GPS_TIME, POSITION_3D},
+        PointAttributeDataType, PointLayout,
     },
     nalgebra::Vector3,
 };
@@ -84,17 +87,20 @@ fn get_query() -> QueryExpression {
         Value::GpsTime(GpsTime(207011500.0))..Value::GpsTime(GpsTime(207012000.0)),
     ));
 
-    QueryExpression::And(
-        Box::new(maybe_vegetation.clone()),
-        Box::new(_doc_polygon_small.clone()),
-    )
+    _all_buildings
+    // QueryExpression::And(
+    //     Box::new(maybe_vegetation.clone()),
+    //     Box::new(_doc_polygon_small.clone()),
+    // )
 }
 
 fn main() -> Result<()> {
     pretty_env_logger::init();
+    let _client = tracy_client::Client::start();
+    std::thread::sleep(Duration::from_secs(2));
 
     let paths = get_point_files_in_path(Path::new(
-        "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/laz",
+        "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/last",
     ));
 
     let shapefile_path = Path::new(
@@ -133,14 +139,23 @@ fn main() -> Result<()> {
     let mut progressive_index = ProgressiveIndex::new();
     let dataset_id = progressive_index.add_dataset(paths.as_slice())?;
 
+    // let output = LASOutput::new(
+    //     "example_query_output_shape_from_laz.las",
+    //     &point_layout_from_las_point_format(&Format::new(0)?, false)?,
+    // )?;
+    let output = StdoutOutput::new(
+        // point_layout_from_las_point_format(&Format::new(1)?, true)?,
+        [
+            POSITION_3D.with_custom_datatype(PointAttributeDataType::Vec3i32),
+            CLASSIFICATION,
+        ]
+        .into_iter()
+        .collect(),
+        false,
+    );
     // let output = NullOutput::default();
-    let output = LASOutput::new(
-        "example_query_output_shape_from_laz.las",
-        &point_layout_from_las_point_format(&Format::new(0)?, false)?,
-    )?;
-    // let output = StdoutOutput::new(PointLayout::from_attributes(&[POSITION_3D, GPS_TIME]), true);
 
-    let query = shapefile_query;
+    let query = get_query();
     eprintln!("Query: {query}");
     let stats = progressive_index.query(dataset_id, query, &NoRefinementStrategy, &output)?;
 

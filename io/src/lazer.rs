@@ -289,16 +289,11 @@ impl<R: Read + Seek> LazerReader<R> {
             .block_offsets_from_start_of_file
             .iter()
             .map(|block_offset| {
-                debug!("Reading block header @ byte offset {block_offset}");
                 reader.seek(SeekFrom::Start(*block_offset))?;
                 BlockHeader::read_from(&mut reader, &default_point_layout)
             })
             .collect::<Result<Vec<_>>>()
             .context("Failed to read block headers")?;
-
-        {
-            debug!("Block headers: {block_headers:#?}");
-        }
 
         let total_number_of_points_in_blocks = block_headers
             .iter()
@@ -351,12 +346,6 @@ impl<R: Read + Seek> LazerReader<R> {
             self.lazer_vlr.offset_to_blocks_evlr
         };
         let size_of_lazer_block = block_point_data_end_byte - block_point_data_start_byte;
-
-        debug!(
-            "Decoding block @ byte offset {} with size {size_of_lazer_block} and offsets {:#?}",
-            self.blocks_evlr.block_offsets_from_start_of_file[block_index],
-            block_header.attribute_byte_offsets
-        );
 
         self.reader
             .seek(SeekFrom::Start(block_point_data_start_byte))?;
@@ -777,12 +766,6 @@ impl<W: Write + Seek> LazerWriter<W> {
             .write_to(&mut self.writer)
             .context("Failed to write LAZER VLR")?;
 
-        debug!(
-            "Writing BlocksVLR @ byte offset {}",
-            self.byte_offset_of_current_block
-        );
-        debug!("BlocksVLR: {:#?}", self.blocks_evlr);
-
         self.writer
             .seek(SeekFrom::Start(self.byte_offset_of_current_block as u64))?;
         let vlr = self
@@ -818,10 +801,6 @@ impl<W: Write + Seek> LazerWriter<W> {
             .collect::<Result<Vec<_>>>()
             .context("Error while flushing attribute encoders")?;
 
-        {
-            let current_position = self.writer.stream_position()?;
-            debug!("Writing block header @ byte offset {}", current_position);
-        }
         let block_header = BlockHeader::from_compressed_attributes(
             &compressed_attributes,
             self.num_points_in_current_block,

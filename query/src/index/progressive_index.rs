@@ -63,6 +63,7 @@ impl KnownDataset {
     /// Evaluate the rough query, i.e. the query that returns a set of `PointRange`s that contain points that might
     /// match the query. The rough query also returns a set of blocks per index that are candidates for index refinement
     pub fn rough_query(&self, query: &Query) -> RoughQueryResult {
+        let _span = tracy_client::span!("rough_query");
         // Which indices does the query need?
         // If only one index, loop over the blocks of that index and filter them using the query
         // If multiple indices, get an iterator over all blocks per index and start with the first block in each index. Advance the iterator
@@ -161,6 +162,8 @@ impl ProgressiveIndex {
         refinement_strategy: &dyn RefinementStrategy,
         data_output: &impl PointOutput,
     ) -> Result<QueryStats> {
+        let _span = tracy_client::span!("query");
+
         info!("Querying dataset {}", dataset_id);
         let timer = Instant::now();
         let runtime_tracker = BlockQueryRuntimeTracker::default();
@@ -215,6 +218,8 @@ impl ProgressiveIndex {
                     .map_with(
                         all_matching_indices.clone(),
                         |all_matching_indices, (point_range, index_result)| -> Result<()> {
+                            let _span = tracy_client::span!("fine_query_block");
+
                             let block_length = point_range.points_in_file.len();
                             // let mut cursor = Cursor::new(file_data);
 
@@ -310,6 +315,8 @@ fn build_initial_block_indices<P: AsRef<Path>>(
     dataset_id: DatasetID,
     input_layer: &InputLayer,
 ) -> Result<(FxHashMap<ValueType, BlockIndex>, String)> {
+    let _span = tracy_client::span!("build_initial_block_indices");
+
     let common_extension =
         common_file_extension(files).context("Can't get common file extension")?;
 

@@ -4,5 +4,6 @@
     "rust-analyzer.linkedProjects": [
         "./query/Cargo.toml",
         "./query/Cargo.toml"
-    ]
+    ],
+    "rust-analyzer.showUnlinkedFileNotification": false
 }

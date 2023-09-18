@@ -16,7 +16,10 @@ use std::{
 
 use crate::index::{DatasetID, PointRange};
 
-use super::{BorrowedLasPointData, LASPointDataReader, LASTPointDataReader, LAZPointDataReader};
+use super::{
+    BorrowedLasPointData, LASPointDataReader, LASTPointDataReader, LAZERPointDataLoader,
+    LAZPointDataReader,
+};
 
 /// Handle to a file in the input layer. The file is uniquely identified by the ID of the dataset it belongs to,
 /// and by its index within that dataset
@@ -201,6 +204,7 @@ impl InputLayer {
         dataset_id: DatasetID,
         point_range: PointRange,
     ) -> Result<PointData> {
+        let _span = tracy_client::span!("InputLayer::get_point_data");
         let file_handle = FileHandle(dataset_id, point_range.file_index);
         self.get_or_create_loader(file_handle).and_then(|loader| {
             loader.get_point_data(
@@ -218,6 +222,7 @@ impl InputLayer {
         point_layout: &PointLayout,
         positions_in_worldspace: bool,
     ) -> Result<PointData> {
+        let _span = tracy_client::span!("InputLayer::get_point_data_in_layout");
         let file_handle = FileHandle(dataset_id, point_range.file_index);
         self.get_or_create_loader(file_handle).and_then(|loader| {
             loader.get_point_data(
@@ -283,6 +288,8 @@ impl InputLayer {
                 .map(|reader| -> Arc<dyn PointDataLoader> { Arc::new(reader) }),
             "laz" | "LAZ" => LAZPointDataReader::new(path)
                 .map(|reader| -> Arc<dyn PointDataLoader> { Arc::new(reader) }),
+            "lazer" | "LAZER" => LAZERPointDataLoader::new(path)
+                .map(|reader| -> Arc<dyn PointDataLoader> { Arc::new(reader) }),
             other => Err(anyhow!("Unsupported file extension {other}")),
         }
     }
@@ -291,6 +298,8 @@ impl InputLayer {
         &self,
         loaders: &mut HashMap<FileHandle, Arc<dyn PointDataLoader>>,
     ) {
+        let _span = tracy_client::span!("evict_loaders");
+
         let current_memory = loaders
             .values()
             .map(|loader| loader.mem_size())
@@ -310,7 +319,7 @@ impl InputLayer {
                 .map(|(handle, file)| (*handle, file.mem_size()))
                 .expect("No file found, but we are above memory threshold. This shouldn't be");
             loaders.remove_entry(&largest_file_handle);
-            info!("Memory consumption exceeded by {memdiff} bytes. Evicted file {largest_file_handle} to free {file_memsize} bytes");
+            // info!("Memory consumption exceeded by {memdiff} bytes. Evicted file {largest_file_handle} to free {file_memsize} bytes");
             memdiff -= file_memsize as i64;
         }
     }

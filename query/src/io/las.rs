@@ -101,12 +101,15 @@ impl PointDataLoader for LASPointDataReader {
         target_layout: &PointLayout,
         positions_in_world_space: bool,
     ) -> Result<PointData> {
+        let _span = tracy_client::span!("LAS::get_point_data");
+
         let source_layout = self.mapped_file.point_layout();
         if target_layout == source_layout && !positions_in_world_space {
             Ok(PointData::MmappedLas(
                 BorrowedLasPointData::from_file_and_range(self.mapped_file.clone(), point_range),
             ))
         } else {
+            let _span = tracy_client::span!("LAS::get_point_data_with_conversion");
             // Read the points in target layout!
             let mut converter =
                 BufferLayoutConverter::for_layouts_with_default(source_layout, target_layout);

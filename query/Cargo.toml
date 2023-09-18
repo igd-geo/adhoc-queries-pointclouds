@@ -38,6 +38,7 @@ bytemuck = {version = "1.13", features = ["derive"] }
 ouroboros = "0.17.2"
 geo = "0.26.0"
 shapefile = { version = "0.5.0", features = ["geo-types"] }
+tracy-client = { version = "0.15.2", features = ["enable"] }
 
 [dev-dependencies]
 regex = "1"

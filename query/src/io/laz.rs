@@ -88,6 +88,8 @@ impl PointDataLoader for LAZPointDataReader {
         target_layout: &PointLayout,
         positions_in_world_space: bool,
     ) -> Result<super::PointData> {
+        let _span = tracy_client::span!("LAZ::get_point_data");
+
         if point_range.is_empty() {
             let empty_buffer = VectorBuffer::new_from_layout(self.default_point_layout.clone());
             return Ok(PointData::OwnedInterleaved(empty_buffer));
@@ -116,6 +118,7 @@ impl PointDataLoader for LAZPointDataReader {
             // decompressed buffer
             Ok(PointData::OwnedInterleaved(point_buffer))
         } else {
+            let _span = tracy_client::span!("LAZ::get_point_data_with_conversion");
             // TODO Newer LAZ versions seem to support selective decompression, but only for point record formats 6-10
             // Might be worth to explore this, but certainly not for this prototype here...
 
