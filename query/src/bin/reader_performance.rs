@@ -2,8 +2,8 @@ use std::{
     borrow::Cow,
     collections::HashSet,
     ffi::OsStr,
-    fs::File,
-    io::{BufReader, Cursor},
+    fs::{File, OpenOptions},
+    io::{BufReader, Cursor, Write},
     path::{Path, PathBuf},
     process::Command,
     time::{Duration, Instant},
@@ -87,7 +87,7 @@ struct Stats {
     dataset: String,
 }
 
-fn reset_page_cache() -> Result<()> {
+fn flush_disk_cache() -> Result<()> {
     let sync_output = Command::new("sync")
         .output()
         .context("Could not execute sync command")?;
@@ -95,14 +95,21 @@ fn reset_page_cache() -> Result<()> {
         bail!("Sync command failed with exit code {}", sync_output.status);
     }
 
-    let purge_output = Command::new("purge")
-        .output()
-        .context("Could not execute purge command")?;
-    if !purge_output.status.success() {
-        bail!(
-            "Purge command failed with exit code {}",
-            purge_output.status
-        );
+    if std::env::consts::OS == "macos" {
+        let purge_output = Command::new("purge")
+            .output()
+            .context("Could not execute purge command")?;
+        if !purge_output.status.success() {
+            bail!(
+                "Purge command failed with exit code {}",
+                purge_output.status
+            );
+        }
+    } else if std::env::consts::OS == "linux" {
+        let mut drop_caches = OpenOptions::new()
+            .write(true)
+            .open("/proc/sys/vm/drop_caches")?;
+        drop_caches.write_all("3".as_bytes())?;
     }
 
     Ok(())
@@ -387,7 +394,7 @@ fn run_experiment(
     let stats_per_run = (0..RUNS)
         .map(|_| -> Result<Stats> {
             if purge_cache {
-                reset_page_cache().context("Failed to reset page cache")?;
+                flush_disk_cache().context("Failed to reset page cache")?;
             }
             runner(file).context("Failed to run experiment")
         })
