@@ -5,10 +5,9 @@ use std::{
 
 use anyhow::{anyhow, bail, Context, Result};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use log::debug;
 use lz4::{Decoder, Encoder, EncoderBuilder};
 use pasture_core::{
-    containers::{BorrowedBuffer, HashMapBuffer, OwningBuffer},
+    containers::{BorrowedBuffer, BorrowedMutBuffer, HashMapBuffer, OwningBuffer},
     layout::PointLayout,
     meta::Metadata,
 };
@@ -328,6 +327,10 @@ impl<R: Read + Seek> LazerReader<R> {
         })
     }
 
+    pub fn las_metadata(&self) -> &LASMetadata {
+        &self.las_metadata
+    }
+
     /// Begin to decode the block with the given index. This creates the LZ4 decoders for each attribute in
     /// the default PointLayout and sets up the `current_block` structure. No data is decoded, but the decoders
     /// are ready after this function is called!
@@ -431,16 +434,13 @@ impl<R: Read + Seek> LazerReader<R> {
             .partition_point(|(cumulative_count, _)| *cumulative_count < point_index)
     }
 
-    fn read_default_layout<'a, 'b, B: OwningBuffer<'a>>(
+    fn read_default_layout<'a, 'b, B: BorrowedMutBuffer<'a>>(
         &mut self,
         point_buffer: &'b mut B,
         count: usize,
     ) -> Result<()> {
-        let point_buffer_offset = point_buffer.len();
-        point_buffer.resize(point_buffer_offset + count);
-
         let mut points_to_read = count;
-        let mut current_offset_in_points = point_buffer_offset;
+        let mut current_offset_in_points = 0;
         while points_to_read > 0 {
             let mut remaining_points_in_current_block = self
                 .current_block
@@ -472,7 +472,7 @@ impl<R: Read + Seek> LazerReader<R> {
         Ok(())
     }
 
-    fn decode_chunk_default_layout<'a, 'b, B: OwningBuffer<'a>>(
+    fn decode_chunk_default_layout<'a, 'b, B: BorrowedMutBuffer<'a>>(
         &mut self,
         point_range_in_buffer: Range<usize>,
         buffer: &'b mut B,
@@ -543,7 +543,7 @@ impl<R: Read + Seek> LazerReader<R> {
 }
 
 impl<R: Read + Seek> PointReader for LazerReader<R> {
-    fn read_into<'a, 'b, B: OwningBuffer<'a>>(
+    fn read_into<'a, 'b, B: BorrowedMutBuffer<'a>>(
         &mut self,
         point_buffer: &'b mut B,
         count: usize,
@@ -590,9 +590,9 @@ impl<R: Read + Seek> PointReader for LazerReader<R> {
             // Read into default layout buffer and convert this buffer into the target buffer
             let mut default_layout_buffer =
                 HashMapBuffer::with_capacity(num_to_read, minimum_source_layout.clone());
+            default_layout_buffer.resize(num_to_read);
             self.read_default_layout(&mut default_layout_buffer, num_to_read)?;
 
-            point_buffer.resize(default_layout_buffer.len());
             converter.convert_into(&default_layout_buffer, point_buffer);
 
             Ok(num_to_read)

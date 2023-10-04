@@ -12,7 +12,10 @@ use pasture_core::{
     },
     nalgebra::Vector3,
 };
-use pasture_io::{las::point_layout_from_las_point_format, las_rs::point::Format};
+use pasture_io::{
+    las::{point_layout_from_las_point_format, LASReader},
+    las_rs::point::Format,
+};
 use query::{
     index::{
         AtomicExpression, Classification, CompareExpression, Geometry, GpsTime,

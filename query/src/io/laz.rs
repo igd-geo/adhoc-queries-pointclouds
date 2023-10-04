@@ -44,7 +44,7 @@ impl LAZPointDataReader {
                 .with_context(|| format!("Failed to mmap LAZ file {}", path.display()))?
         };
 
-        let las_metadata = LASReader::from_read(Cursor::new(&mmap), true)
+        let las_metadata = LASReader::from_read(Cursor::new(&mmap), true, false)
             .with_context(|| format!("Failed to get metadata from LAZ file {}", path.display()))?
             .las_metadata()
             .clone();
@@ -155,6 +155,7 @@ impl PointDataLoader for LAZPointDataReader {
                             position.z * transforms.z.scale + transforms.z.offset,
                         )
                     },
+                    false,
                 );
             }
             let converted_points = converter.convert::<VectorBuffer, _>(&point_buffer);

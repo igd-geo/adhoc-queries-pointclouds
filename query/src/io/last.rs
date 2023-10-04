@@ -1,12 +1,8 @@
-use anyhow::{anyhow, bail, Context, Result};
+use anyhow::{bail, Context, Result};
 use io::last::LASTReader;
 use pasture_core::{
     containers::HashMapBuffer,
-    layout::{
-        attributes::POSITION_3D, conversion::BufferLayoutConverter, PointAttributeDataType,
-        PointLayout,
-    },
-    nalgebra::Vector3,
+    layout::{attributes::POSITION_3D, PointLayout},
 };
 use pasture_io::{
     base::{PointReader, SeekToPoint},
@@ -37,7 +33,7 @@ impl LASTPointDataReader {
                 .with_context(|| format!("Failed to mmap LAST file {}", path.display()))?
         };
 
-        let las_metadata = LASReader::from_read(Cursor::new(&mmap), false)
+        let las_metadata = LASReader::from_read(Cursor::new(&mmap), false, false)
             .with_context(|| format!("Failed to get metadata from LAST file {}", path.display()))?
             .las_metadata()
             .clone();

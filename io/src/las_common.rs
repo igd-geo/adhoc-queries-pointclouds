@@ -10,7 +10,7 @@ use pasture_core::{
     nalgebra::Vector3,
 };
 use pasture_io::{
-    las::{ATTRIBUTE_BASIC_FLAGS, ATTRIBUTE_EXTENDED_FLAGS},
+    las::{ATTRIBUTE_BASIC_FLAGS, ATTRIBUTE_EXTENDED_FLAGS, ATTRIBUTE_LOCAL_LAS_POSITION},
     las_rs::raw,
 };
 
@@ -30,6 +30,10 @@ pub fn get_minimum_layout_for_las_conversion(
                 .map(|a| a.attribute_definition().clone())
         })
         .collect::<PointLayout>();
+
+    if target_layout.has_attribute_with_name(POSITION_3D.name()) {
+        common_attributes.add_attribute(ATTRIBUTE_LOCAL_LAS_POSITION, FieldAlignment::Default);
+    }
 
     if target_layout.has_attribute_with_name(RETURN_NUMBER.name())
         || target_layout.has_attribute_with_name(NUMBER_OF_RETURNS.name())
@@ -55,29 +59,31 @@ pub fn get_default_las_converter<'a>(
 
     let mut converter =
         BufferLayoutConverter::for_layouts_with_default(source_layout, target_layout);
-    // Some custom parsing things:
-    // - If target layout has positions as Vector3<f64>, we assume this means 'world space' and convert accordingly
-    // - For all high-level flag attributes in target layout, we convert accordingly from the low level attributes.
-    //   For example, RETURN_NUMBER in target will be converted from either ATTRIBUTE_BASIC_FLAGS or
-    //   ATTRIBUTE_EXTENDED_FLAGS, depending on the underlying point format
-    if target_layout.has_attribute(&POSITION_3D) {
-        converter.set_custom_mapping_with_transformation(
-            &POSITION_3D.with_custom_datatype(PointAttributeDataType::Vec3i32),
-            &POSITION_3D,
-            move |pos: Vector3<f64>| -> Vector3<f64> {
-                Vector3::new(
-                    (pos.x * raw_las_header.x_scale_factor) + raw_las_header.x_offset,
-                    (pos.y * raw_las_header.y_scale_factor) + raw_las_header.y_offset,
-                    (pos.z * raw_las_header.z_scale_factor) + raw_las_header.z_offset,
-                )
-            },
-        );
+    if let Some(position_attribute) = target_layout.get_attribute_by_name(POSITION_3D.name()) {
+        match position_attribute.datatype() {
+                PointAttributeDataType::Vec3f64 => converter.set_custom_mapping_with_transformation(&ATTRIBUTE_LOCAL_LAS_POSITION, position_attribute.attribute_definition(), move |pos: Vector3<f64>| -> Vector3<f64> {
+                    Vector3::new(
+                        (pos.x * raw_las_header.x_scale_factor) + raw_las_header.x_offset,
+                        (pos.y * raw_las_header.y_scale_factor) + raw_las_header.y_offset,
+                        (pos.z * raw_las_header.z_scale_factor) + raw_las_header.z_offset,
+                    )
+                }, false),
+                PointAttributeDataType::Vec3f32 => converter.set_custom_mapping_with_transformation(&ATTRIBUTE_LOCAL_LAS_POSITION, position_attribute.attribute_definition(), move |pos: Vector3<f32>| -> Vector3<f32> {
+                    Vector3::new(
+                        ((pos.x as f64 * raw_las_header.x_scale_factor) + raw_las_header.x_offset) as f32,
+                        ((pos.y as f64 * raw_las_header.y_scale_factor) + raw_las_header.y_offset) as f32,
+                        ((pos.z as f64 * raw_las_header.z_scale_factor) + raw_las_header.z_offset) as f32,
+                    )
+                }, false),
+                other => bail!("Invalid datatype {other} for POSITION_3D attribute. Only Vec3f64 and Vec3f32 are supported!"),
+            }
     }
     if target_layout.has_attribute(&RETURN_NUMBER) {
         converter.set_custom_mapping_with_transformation(
             &ATTRIBUTE_BASIC_FLAGS,
             &RETURN_NUMBER,
             |flags: u8| -> u8 { flags & 0b111 },
+            false,
         );
     }
     if target_layout.has_attribute(&NUMBER_OF_RETURNS) {
@@ -85,6 +91,7 @@ pub fn get_default_las_converter<'a>(
             &ATTRIBUTE_BASIC_FLAGS,
             &NUMBER_OF_RETURNS,
             |flags: u8| -> u8 { (flags >> 3) & 0b111 },
+            false,
         );
     }
     if target_layout.has_attribute(&SCAN_DIRECTION_FLAG) {
@@ -92,6 +99,7 @@ pub fn get_default_las_converter<'a>(
             &ATTRIBUTE_BASIC_FLAGS,
             &SCAN_DIRECTION_FLAG,
             |flags: u8| -> u8 { (flags >> 6) & 1 },
+            false,
         );
     }
     if target_layout.has_attribute(&EDGE_OF_FLIGHT_LINE) {
@@ -99,6 +107,7 @@ pub fn get_default_las_converter<'a>(
             &ATTRIBUTE_BASIC_FLAGS,
             &EDGE_OF_FLIGHT_LINE,
             |flags: u8| -> u8 { (flags >> 7) & 1 },
+            false,
         );
     }
 

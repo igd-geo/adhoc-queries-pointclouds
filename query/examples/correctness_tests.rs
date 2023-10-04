@@ -248,7 +248,7 @@ fn apply_query_to_las_dataset(query: &QueryExpression, files: &[PathBuf]) -> Res
     files
         .into_par_iter()
         .map(|file| -> Result<usize> {
-            let mut las_reader = LASReader::from_path(&file)?;
+            let mut las_reader = LASReader::from_path(&file, false)?;
             let points = las_reader.read::<VectorBuffer>(las_reader.remaining_points())?;
             let matching_indices = get_matching_indices(query, &points);
             Ok(matching_indices.len())

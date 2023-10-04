@@ -91,7 +91,7 @@ fn gen_random_point_sample(count: usize) -> Vec<bool> {
 fn read_with_pasture(indices: &[bool], file: &Path, with_filtering: bool) -> Result<()> {
     let file = File::open(file).context("Can't open file")?;
     let file_mmap = unsafe { Mmap::map(&file).context("Can't mmap file")? };
-    let mut reader = LASReader::from_read(Cursor::new(file_mmap), false)
+    let mut reader = LASReader::from_read(Cursor::new(file_mmap), false, false)
         .context("Failed to create LASReader")?;
 
     let mut buffer =

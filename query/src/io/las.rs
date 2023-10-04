@@ -32,7 +32,7 @@ impl MappedLASFile {
             File::open(path).context(format!("Failed to open LAS file {}", path.display()))?;
         let mmap = unsafe { memmap::Mmap::map(&file).context("Failed to mmap LAS file")? };
 
-        let las_metadata = LASReader::from_read(Cursor::new(&mmap), false)
+        let las_metadata = LASReader::from_read(Cursor::new(&mmap), false, false)
             .context("Failed to read LAS file")?
             .las_metadata()
             .clone();
@@ -142,6 +142,7 @@ impl PointDataLoader for LASPointDataReader {
                             position.z * transforms.z.scale + transforms.z.offset,
                         )
                     },
+                    false,
                 );
             }
             let source_slice = self.mapped_file.get_buffer_for_points(point_range);

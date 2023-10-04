@@ -11,7 +11,7 @@ use byteorder::{LittleEndian, ReadBytesExt};
 
 use geo::{coord, Contains, LineString, Polygon};
 use pasture_core::{
-    containers::{AttributeView, BorrowedBuffer},
+    containers::BorrowedBuffer,
     layout::{
         attributes::{CLASSIFICATION, GPS_TIME, NUMBER_OF_RETURNS, POSITION_3D, RETURN_NUMBER},
         PointAttributeDataType, PointAttributeDefinition, PointLayout, PrimitiveType,

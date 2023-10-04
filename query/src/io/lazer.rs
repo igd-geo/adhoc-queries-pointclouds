@@ -35,7 +35,7 @@ impl LAZERPointDataLoader {
                 .with_context(|| format!("Failed to mmap LAZ file {}", path.display()))?
         };
 
-        let las_metadata = LASReader::from_read(Cursor::new(&mmap), false)
+        let las_metadata = LASReader::from_read(Cursor::new(&mmap), false, false)
             .with_context(|| format!("Failed to get metadata from LAZER file {}", path.display()))?
             .las_metadata()
             .clone();

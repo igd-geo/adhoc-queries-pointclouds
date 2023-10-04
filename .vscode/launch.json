@@ -11,10 +11,11 @@
             "cargo": {
                 "args": [
                     "build",
-                    "--bin=example_query",
+                    "--bin=selective_reader_performance",
                 ]
             },
             "args": [
+                "test.las"
             ],
             "cwd": "${workspaceFolder}",
             "env": {

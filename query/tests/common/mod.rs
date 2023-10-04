@@ -104,7 +104,7 @@ pub fn write_as_las(points: &VectorBuffer, path: &Path) -> Result<VectorBuffer> 
         writer.flush().context("Failed to flush LAS writer")?;
     }
 
-    let mut reader = LASReader::from_path(path).context("Can't open LAS file")?;
+    let mut reader = LASReader::from_path(path, false).context("Can't open LAS file")?;
     let mut ret = VectorBuffer::with_capacity(points.len(), points.point_layout().clone());
     reader
         .read_into(&mut ret, points.len())

@@ -2,7 +2,7 @@ use std::io::{Cursor, Read, Seek, SeekFrom, Write};
 
 use anyhow::{bail, Context, Result};
 use pasture_core::{
-    containers::{BorrowedBuffer, HashMapBuffer, OwningBuffer},
+    containers::{BorrowedBuffer, BorrowedMutBuffer, HashMapBuffer, OwningBuffer},
     layout::{PointAttributeMember, PointLayout},
 };
 use pasture_io::{
@@ -100,7 +100,7 @@ pub struct LASTReader<R: Read + Seek> {
 impl<R: Read + Seek + Send> LASTReader<R> {
     pub fn from_read(mut read: R) -> Result<Self> {
         let las_metadata = {
-            let las_reader = LASReader::from_read(&mut read, false)?;
+            let las_reader = LASReader::from_read(&mut read, false, false)?;
             las_reader.las_metadata().clone()
         };
         let raw_las_header = las_metadata
@@ -124,6 +124,10 @@ impl<R: Read + Seek + Send> LASTReader<R> {
         self.las_metadata.point_count() - self.current_point_index
     }
 
+    pub fn las_metadata(&self) -> &LASMetadata {
+        &self.las_metadata
+    }
+
     fn byte_offset_of_attribute_data(&self, attribute: &PointAttributeMember) -> usize {
         self.offset_to_point_records
             + (attribute.offset() as usize * self.las_metadata.point_count())
@@ -133,15 +137,12 @@ impl<R: Read + Seek + Send> LASTReader<R> {
     /// all native point attributes of the current LAST file. If an attribute is present in `buffer`, its
     /// datatype must match the default datatype of the attribute in the LAST file. For example, if the
     /// buffer has a `POSITION_3D` attribute, it MUST be of datatype `Vec3i32`
-    fn read_default_attributes<'a, 'b, B: OwningBuffer<'a>>(
+    fn read_default_attributes<'a, 'b, B: BorrowedMutBuffer<'a>>(
         &mut self,
         buffer: &'b mut B,
         count: usize,
     ) -> Result<()> {
-        let buffer_start_point = buffer.len();
-        buffer.resize(buffer_start_point + count);
-
-        let new_points_range = buffer_start_point..buffer.len();
+        let new_points_range = 0..buffer.len();
         let required_attributes = self
             .raw_point_layout
             .attributes()
@@ -187,7 +188,7 @@ impl<R: Read + Seek + Send> LASTReader<R> {
 }
 
 impl<R: Read + Seek + Send> PointReader for LASTReader<R> {
-    fn read_into<'a, 'b, B: OwningBuffer<'a>>(
+    fn read_into<'a, 'b, B: BorrowedMutBuffer<'a>>(
         &mut self,
         point_buffer: &'b mut B,
         count: usize,
@@ -201,7 +202,15 @@ impl<R: Read + Seek + Send> PointReader for LASTReader<R> {
             return Ok(0);
         }
 
-        if *point_buffer.point_layout() == self.raw_point_layout {
+        let minimum_layout_to_parse = get_minimum_layout_for_las_conversion(
+            &self.raw_point_layout,
+            point_buffer.point_layout(),
+        )
+        .context(
+            "Could not determine appropriate PointLayout for data conversion from LAST file",
+        )?;
+
+        if *point_buffer.point_layout() == minimum_layout_to_parse {
             let _span = tracy_client::span!("LastReader::read_into default layout");
             let _plot = tracy_client::plot!("points", count as f64);
 
@@ -210,16 +219,9 @@ impl<R: Read + Seek + Send> PointReader for LASTReader<R> {
             let _span = tracy_client::span!("LastReader::read_into with conversion");
             let _plot = tracy_client::plot!("points", count as f64);
 
-            let minimum_layout_to_parse = get_minimum_layout_for_las_conversion(
-                &self.raw_point_layout,
-                point_buffer.point_layout(),
-            )
-            .context(
-                "Could not determine appropriate PointLayout for data conversion from LAST file",
-            )?;
-
             let mut tmp_buffer =
                 HashMapBuffer::with_capacity(num_points_to_read, minimum_layout_to_parse);
+            tmp_buffer.resize(num_points_to_read);
             self.read_default_attributes(&mut tmp_buffer, num_points_to_read)?;
 
             let target_layout = point_buffer.point_layout().clone();
@@ -244,7 +246,6 @@ impl<R: Read + Seek + Send> PointReader for LASTReader<R> {
                 raw_las_header,
             )
             .context("Could not get a buffer layout converter for the target buffer")?;
-            point_buffer.resize(tmp_buffer.len());
             {
                 let _span = tracy_client::span!("convert_into");
                 converter.convert_into(&tmp_buffer, point_buffer);

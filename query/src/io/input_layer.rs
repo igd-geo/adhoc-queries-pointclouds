@@ -1,5 +1,4 @@
 use anyhow::{anyhow, bail, Context, Result};
-use log::info;
 use pasture_core::{
     containers::{BorrowedBuffer, HashMapBuffer, InterleavedBuffer, VectorBuffer},
     layout::PointLayout,
@@ -176,7 +175,7 @@ impl InputLayer {
             // TODO Does the LAS reader also work for LAZ? For LAST, it will work. But in any case, might be better
             // to replace this with a `LASMetadata::from_path` function
             // And of course also handle non-LAS files here
-            let las_reader = LASReader::from_path(path)?;
+            let las_reader = LASReader::from_path(path, false)?;
             self.las_files_metadata.insert(
                 FileHandle(dataset_id, file_number),
                 las_reader.las_metadata().clone(),
