@@ -302,8 +302,9 @@ fn benchmark_last_pasture_custom_layout(
     // (since all tests within this experiment work without any format conversion, i.e. they only
     // read a subset of the LAST file)
     // Calculating throughput from file size would be wrong if we for example only read classifications
-    let bytes_per_second =
-        points.point_layout().size_of_point_entry() as f64 / runtime.as_secs_f64();
+    let bytes_per_second = (points.len() as f64
+        * points.point_layout().size_of_point_entry() as f64)
+        / runtime.as_secs_f64();
     let points_per_second = points.len() as f64 / runtime.as_secs_f64();
 
     let dataset = if mmapped {
