@@ -1287,8 +1287,8 @@ dependencies = [
  "log",
  "lz4",
  "memmap",
- "pasture-core 0.3.0",
- "pasture-derive 0.2.0",
+ "pasture-core 0.3.0 (git+https://github.com/Mortano/pasture.git?branch=parse-extra-bytes)",
+ "pasture-derive 0.2.0 (git+https://github.com/Mortano/pasture.git?branch=parse-extra-bytes)",
  "pasture-io",
  "pretty_env_logger",
  "rayon",
@@ -2045,6 +2045,7 @@ checksum = "de3145af08024dea9fa9914f381a17b8fc6034dfb00f3a84013f7ff43f29ed4c"
 [[package]]
 name = "pasture-core"
 version = "0.3.0"
+source = "git+https://github.com/Mortano/pasture.git?branch=parse-extra-bytes#bbf68c875a2b4f4418bbb5b45e3183739e710930"
 dependencies = [
  "anyhow",
  "bytemuck",
@@ -2054,7 +2055,7 @@ dependencies = [
  "lazy_static",
  "nalgebra 0.32.3",
  "num-traits",
- "pasture-derive 0.2.0",
+ "pasture-derive 0.2.0 (git+https://github.com/Mortano/pasture.git?branch=parse-extra-bytes)",
  "rayon",
  "serde",
  "static_assertions",
@@ -2080,6 +2081,7 @@ dependencies = [
 [[package]]
 name = "pasture-derive"
 version = "0.2.0"
+source = "git+https://github.com/Mortano/pasture.git?branch=parse-extra-bytes#bbf68c875a2b4f4418bbb5b45e3183739e710930"
 dependencies = [
  "anyhow",
  "quote",
@@ -2099,6 +2101,7 @@ dependencies = [
 [[package]]
 name = "pasture-io"
 version = "0.3.0"
+source = "git+https://github.com/Mortano/pasture.git?branch=parse-extra-bytes#bbf68c875a2b4f4418bbb5b45e3183739e710930"
 dependencies = [
  "anyhow",
  "array-init",
@@ -2114,8 +2117,8 @@ dependencies = [
  "lazy_static",
  "memmap2 0.7.1",
  "num-traits",
- "pasture-core 0.3.0",
- "pasture-derive 0.2.0",
+ "pasture-core 0.3.0 (git+https://github.com/Mortano/pasture.git?branch=parse-extra-bytes)",
+ "pasture-derive 0.2.0 (git+https://github.com/Mortano/pasture.git?branch=parse-extra-bytes)",
  "scopeguard",
  "serde",
  "serde_json",
@@ -2329,8 +2332,8 @@ dependencies = [
  "num_cpus",
  "ouroboros",
  "page_size",
- "pasture-core 0.3.0",
- "pasture-derive 0.2.0",
+ "pasture-core 0.3.0 (git+https://github.com/Mortano/pasture.git?branch=parse-extra-bytes)",
+ "pasture-derive 0.2.0 (git+https://github.com/Mortano/pasture.git?branch=parse-extra-bytes)",
  "pasture-io",
  "pretty_env_logger",
  "rand",

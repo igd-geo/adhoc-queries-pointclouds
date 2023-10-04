@@ -16,9 +16,9 @@ anyhow = "1.0.33"
 byteorder = "1.3.4"
 lz4 = "1.23.2"
 bytemuck = { version = "1.5.1", features = ["derive"] }
-pasture-core = { path = "/Users/pbormann/dev/proj_int/pasture/pasture-core" }
-pasture-io =  { path = "/Users/pbormann/dev/proj_int/pasture/pasture-io" }
-pasture-derive =   { path = "/Users/pbormann/dev/proj_int/pasture/pasture-derive" }
+pasture-core = { git = "https://github.com/Mortano/pasture.git", branch = "parse-extra-bytes" }
+pasture-io = { git = "https://github.com/Mortano/pasture.git", branch = "parse-extra-bytes" }
+pasture-derive = { git = "https://github.com/Mortano/pasture.git", branch = "parse-extra-bytes" }
 log = "0.4.17"
 pretty_env_logger = "0.4.0"
 tracy-client = { version = "0.15.2", default-features = false, features = [] }
