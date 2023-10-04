@@ -1,7 +1,7 @@
 use std::{
     borrow::Cow,
     ffi::OsStr,
-    path::{Path, PathBuf},
+    path::{Path, PathBuf}, process::Command, fs::OpenOptions, io::Write,
 };
 
 use anyhow::{bail, Context, Result};
@@ -78,6 +78,39 @@ const VARIABLE_OUTPUT_ATTRIBUTES: VariableTemplate = VariableTemplate::new(
     ),
     Cow::Borrowed("text"),
 );
+const VARIABLE_PURGE_CACHE: VariableTemplate = VariableTemplate::new(
+    Cow::Borrowed("Purge cache before run?"),
+    Cow::Borrowed("Is the disk cache being purged before each run of the experiment?"),
+    Cow::Borrowed("bool"),
+);
+
+fn flush_disk_cache() -> Result<()> {
+    let sync_output = Command::new("sync")
+        .output()
+        .context("Could not execute sync command")?;
+    if !sync_output.status.success() {
+        bail!("Sync command failed with exit code {}", sync_output.status);
+    }
+
+    if std::env::consts::OS == "macos" {
+        let purge_output = Command::new("purge")
+            .output()
+            .context("Could not execute purge command")?;
+        if !purge_output.status.success() {
+            bail!(
+                "Purge command failed with exit code {}",
+                purge_output.status
+            );
+        }
+    } else if std::env::consts::OS == "linux" {
+        let mut drop_caches = OpenOptions::new()
+            .write(true)
+            .open("/proc/sys/vm/drop_caches")?;
+        drop_caches.write_all("3".as_bytes())?;
+    }
+
+    Ok(())
+}
 
 fn crude_shapefile_parsing(path: impl AsRef<Path>) -> Result<QueryExpression> {
     let shape_reader = ShapeReader::from_path(path).context("Can't read shapefile")?;
@@ -116,7 +149,7 @@ fn run_query(params: QueryParams, run_number: usize, total_runs: usize,) -> Resu
     info!("Run {run_number:3} / {total_runs:3}: file format: {} - query: {} - output attributes: {}", params.file_format, params.query, params.target_layout);
 
     if params.flush_disk_cache {
-        todo!()
+        flush_disk_cache().context("Failed to flush disk cache")?;
     }
 
     let mut index = ProgressiveIndex::new();
@@ -247,6 +280,8 @@ fn main() -> Result<()> {
 
     info!("Ad-hoc query experiment - doc dataset");
 
+    let machine = std::env::var("MACHINE").context("To run experiments, please set the 'MACHINE' environment variable to the name of the machine that you are running this experiment on. This is required so that experiment data can be mapped to the actual machine that ran the experiment. This will typically be the name or system configuration of the computer that runs the experiment.")?;
+
     let doc_queries =
         experiment_queries_doc().context("Failed to build queries for doc dataset")?;
 
@@ -282,6 +317,7 @@ fn main() -> Result<()> {
         VARIABLE_BYTES_WRITTEN,
         VARIABLE_QUERY,
         VARIABLE_OUTPUT_ATTRIBUTES,
+        VARIABLE_PURGE_CACHE,
     ]
     .into_iter()
     .collect();
@@ -300,29 +336,32 @@ fn main() -> Result<()> {
     // Dataset is in outermost loop so that - if we don't flush the disk cache - we immediately get results for
     // cached data. Which we might want
     for (file_format, files) in &doc_datasets {
-        for query in &doc_queries {
-            for output_layout in &output_point_layouts {
-                let params = QueryParams {
-                    files: files.clone(),
-                    flush_disk_cache: false,
-                    query: query.clone(),
-                    target_layout: output_layout.clone(),
-                    file_format,
-                };
+        for flush_disk_cache in [false, true] {
+            for query in &doc_queries {
+                for output_layout in &output_point_layouts {
+                    let params = QueryParams {
+                        files: files.clone(),
+                        flush_disk_cache,
+                        query: query.clone(),
+                        target_layout: output_layout.clone(),
+                        file_format,
+                    };
 
-                current_run += 1;
-                experiment.run(|run_context| {
-                    let (query_stats, output_stats) = run_query(params, current_run, total_runs).context("Executing query failed")?;
-                    
-                    run_context.add_value_by_name(VARIABLE_DATASET.name(), format!("doc {file_format}"));
-                    run_context.add_value_by_name(VARIABLE_MACHINE.name(), "pc3018");
-                    run_context.add_value_by_name(VARIABLE_RUNTIME.name(), query_stats.runtime.as_millis());
-                    run_context.add_value_by_name(VARIABLE_BYTES_WRITTEN.name(), output_stats.bytes_written);
-                    run_context.add_value_by_name(VARIABLE_QUERY.name(), query.to_string());
-                    run_context.add_value_by_name(VARIABLE_OUTPUT_ATTRIBUTES.name(), output_layout.to_string());
+                    current_run += 1;
+                    experiment.run(|run_context| {
+                        let (query_stats, output_stats) = run_query(params, current_run, total_runs).context("Executing query failed")?;
+                        
+                        run_context.add_value_by_name(VARIABLE_DATASET.name(), format!("doc {file_format}"));
+                        run_context.add_value_by_name(VARIABLE_MACHINE.name(), machine.as_str());
+                        run_context.add_value_by_name(VARIABLE_RUNTIME.name(), query_stats.runtime.as_millis());
+                        run_context.add_value_by_name(VARIABLE_BYTES_WRITTEN.name(), output_stats.bytes_written);
+                        run_context.add_value_by_name(VARIABLE_QUERY.name(), query.to_string());
+                        run_context.add_value_by_name(VARIABLE_OUTPUT_ATTRIBUTES.name(), output_layout.to_string());
+                        run_context.add_value_by_name(VARIABLE_PURGE_CACHE.name(), flush_disk_cache.to_string());
 
-                    Ok(())
-                }).with_context(|| format!("Experiment run failed (query {query}, file format {file_format}, output layout {output_layout})"))?;
+                        Ok(())
+                    }).with_context(|| format!("Experiment run failed (query {query}, file format {file_format}, output layout {output_layout})"))?;
+                }
             }
         }
     }
