@@ -8,7 +8,7 @@ use std::{
 use anyhow::{bail, Context, Result};
 use io::lazer::LazerReader;
 use pasture_core::{
-    containers::{HashMapBuffer, MakeBufferFromLayout},
+    containers::{HashMapBuffer, MakeBufferFromLayout, OwningBuffer},
     layout::{attributes::POSITION_3D, PointLayout},
 };
 use pasture_io::{
@@ -82,6 +82,7 @@ impl PointDataLoader for LAZERPointDataLoader {
         }
 
         let mut points = HashMapBuffer::with_capacity(point_range.len(), target_layout.clone());
+        points.resize(point_range.len());
         lazer_reader
             .read_into(&mut points, point_range.len())
             .context("Failed to read points")?;

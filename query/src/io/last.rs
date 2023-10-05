@@ -1,7 +1,7 @@
 use anyhow::{bail, Context, Result};
 use io::last::LASTReader;
 use pasture_core::{
-    containers::HashMapBuffer,
+    containers::{HashMapBuffer, OwningBuffer},
     layout::{attributes::POSITION_3D, PointLayout},
 };
 use pasture_io::{
@@ -71,6 +71,7 @@ impl PointDataLoader for LASTPointDataReader {
 
         // TODO Support for borrowed columnar data
         let mut buffer = HashMapBuffer::with_capacity(point_range.len(), target_layout.clone());
+        buffer.resize(point_range.len());
         last_reader.read_into(&mut buffer, point_range.len())?;
         Ok(PointData::OwnedColumnar(buffer))
 

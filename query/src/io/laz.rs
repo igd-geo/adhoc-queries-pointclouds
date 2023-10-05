@@ -15,7 +15,7 @@ use pasture_core::{
     nalgebra::Vector3,
 };
 use pasture_io::{
-    las::{point_layout_from_las_metadata, LASMetadata, LASReader},
+    las::{point_layout_from_las_metadata, LASMetadata, LASReader, ATTRIBUTE_LOCAL_LAS_POSITION},
     las_rs::Vlr,
 };
 
@@ -130,8 +130,7 @@ impl PointDataLoader for LAZPointDataReader {
             // By default, LAS positions are in local space, but we might want them in world space, especially if the
             // dataset contains multiple files. This requires the output PointLayout to have a POSITION_3D attribute!
             if positions_in_world_space {
-                let source_positions_attribute =
-                    POSITION_3D.with_custom_datatype(PointAttributeDataType::Vec3i32);
+                let source_positions_attribute = ATTRIBUTE_LOCAL_LAS_POSITION;
                 let target_positions_attribute = target_layout
                     .get_attribute_by_name(POSITION_3D.name())
                     .ok_or(anyhow!("No POSITION_3D attribute found in target layout"))?;

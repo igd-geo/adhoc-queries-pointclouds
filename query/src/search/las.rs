@@ -13,14 +13,14 @@ use geo::{coord, Contains, LineString, Polygon};
 use pasture_core::{
     containers::BorrowedBuffer,
     layout::{
-        attributes::{CLASSIFICATION, GPS_TIME, NUMBER_OF_RETURNS, POSITION_3D, RETURN_NUMBER},
-        PointAttributeDataType, PointAttributeDefinition, PointLayout, PrimitiveType,
+        attributes::{CLASSIFICATION, GPS_TIME, NUMBER_OF_RETURNS, RETURN_NUMBER},
+        PointAttributeDefinition, PointLayout, PrimitiveType,
     },
     math::AABB,
     nalgebra::{clamp, Point3, Vector3},
 };
 use pasture_io::{
-    las::{ATTRIBUTE_BASIC_FLAGS, ATTRIBUTE_EXTENDED_FLAGS},
+    las::{ATTRIBUTE_BASIC_FLAGS, ATTRIBUTE_EXTENDED_FLAGS, ATTRIBUTE_LOCAL_LAS_POSITION},
     las_rs::{raw, Transform, Vector},
 };
 use std::io::SeekFrom;
@@ -413,8 +413,7 @@ impl CompiledQueryAtom for LasQueryAtomWithin<Position> {
         let local_bounds = AABB::from_min_max(local_min.into(), local_max.into());
 
         // We can access the raw position data using a pasture `AttributeView`
-        let local_position_attribute =
-            POSITION_3D.with_custom_datatype(PointAttributeDataType::Vec3i32);
+        let local_position_attribute = ATTRIBUTE_LOCAL_LAS_POSITION;
         let point_data = get_data_with_at_least_attribute(
             &local_position_attribute,
             input_layer,
@@ -764,8 +763,7 @@ impl CompiledQueryAtom for LasQueryAtomCompare<Position> {
         let local_position = to_local_integer_position(&self.value.0, las_transforms);
 
         // We can access the raw position data using a pasture `AttributeView`
-        let local_position_attribute =
-            POSITION_3D.with_custom_datatype(PointAttributeDataType::Vec3i32);
+        let local_position_attribute = ATTRIBUTE_LOCAL_LAS_POSITION;
         let point_data = get_data_with_at_least_attribute(
             &local_position_attribute,
             input_layer,
@@ -1141,8 +1139,7 @@ impl CompiledQueryAtom for LasQueryAtomIntersects {
             .transforms();
         let local_geometry = geometry_to_local_las_space(&self.geometry, las_transforms);
 
-        let local_position_attribute =
-            &POSITION_3D.with_custom_datatype(PointAttributeDataType::Vec3i32);
+        let local_position_attribute = ATTRIBUTE_LOCAL_LAS_POSITION;
         let point_data = get_data_with_at_least_attribute(
             &local_position_attribute,
             input_layer,

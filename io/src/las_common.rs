@@ -2,7 +2,8 @@ use anyhow::{bail, Result};
 use pasture_core::{
     layout::{
         attributes::{
-            EDGE_OF_FLIGHT_LINE, NUMBER_OF_RETURNS, POSITION_3D, RETURN_NUMBER, SCAN_DIRECTION_FLAG,
+            CLASSIFICATION_FLAGS, EDGE_OF_FLIGHT_LINE, NUMBER_OF_RETURNS, POSITION_3D,
+            RETURN_NUMBER, SCANNER_CHANNEL, SCAN_DIRECTION_FLAG,
         },
         conversion::BufferLayoutConverter,
         FieldAlignment, PointAttributeDataType, PointLayout,
@@ -18,9 +19,7 @@ pub fn get_minimum_layout_for_las_conversion(
     source_layout: &PointLayout,
     target_layout: &PointLayout,
 ) -> Result<PointLayout> {
-    if source_layout.has_attribute(&ATTRIBUTE_EXTENDED_FLAGS) {
-        bail!("Extended LAS-like formats (point records >= 6) are currently unsupported");
-    }
+    let is_extended = source_layout.has_attribute(&ATTRIBUTE_EXTENDED_FLAGS);
 
     let mut common_attributes = target_layout
         .attributes()
@@ -35,7 +34,17 @@ pub fn get_minimum_layout_for_las_conversion(
         common_attributes.add_attribute(ATTRIBUTE_LOCAL_LAS_POSITION, FieldAlignment::Default);
     }
 
-    if target_layout.has_attribute_with_name(RETURN_NUMBER.name())
+    if is_extended {
+        if target_layout.has_attribute_with_name(RETURN_NUMBER.name())
+            || target_layout.has_attribute_with_name(NUMBER_OF_RETURNS.name())
+            || target_layout.has_attribute_with_name(CLASSIFICATION_FLAGS.name())
+            || target_layout.has_attribute_with_name(SCANNER_CHANNEL.name())
+            || target_layout.has_attribute_with_name(SCAN_DIRECTION_FLAG.name())
+            || target_layout.has_attribute_with_name(EDGE_OF_FLIGHT_LINE.name())
+        {
+            common_attributes.add_attribute(ATTRIBUTE_EXTENDED_FLAGS, FieldAlignment::Default);
+        }
+    } else if target_layout.has_attribute_with_name(RETURN_NUMBER.name())
         || target_layout.has_attribute_with_name(NUMBER_OF_RETURNS.name())
         || target_layout.has_attribute_with_name(SCAN_DIRECTION_FLAG.name())
         || target_layout.has_attribute_with_name(EDGE_OF_FLIGHT_LINE.name())
@@ -53,9 +62,7 @@ pub fn get_default_las_converter<'a>(
     target_layout: &'a PointLayout,
     raw_las_header: raw::Header,
 ) -> Result<BufferLayoutConverter<'a>> {
-    if source_layout.has_attribute(&ATTRIBUTE_EXTENDED_FLAGS) {
-        bail!("Extended LAS-like formats (point records >= 6) are currently unsupported");
-    }
+    let is_extended = source_layout.has_attribute(&ATTRIBUTE_EXTENDED_FLAGS);
 
     let mut converter =
         BufferLayoutConverter::for_layouts_with_default(source_layout, target_layout);
@@ -79,36 +86,88 @@ pub fn get_default_las_converter<'a>(
             }
     }
     if target_layout.has_attribute(&RETURN_NUMBER) {
-        converter.set_custom_mapping_with_transformation(
-            &ATTRIBUTE_BASIC_FLAGS,
-            &RETURN_NUMBER,
-            |flags: u8| -> u8 { flags & 0b111 },
-            false,
-        );
+        if is_extended {
+            converter.set_custom_mapping_with_transformation(
+                &ATTRIBUTE_EXTENDED_FLAGS,
+                &RETURN_NUMBER,
+                |flags: u16| -> u16 { flags & 0b1111 },
+                true,
+            );
+        } else {
+            converter.set_custom_mapping_with_transformation(
+                &ATTRIBUTE_BASIC_FLAGS,
+                &RETURN_NUMBER,
+                |flags: u8| -> u8 { flags & 0b111 },
+                false,
+            );
+        }
     }
     if target_layout.has_attribute(&NUMBER_OF_RETURNS) {
+        if is_extended {
+            converter.set_custom_mapping_with_transformation(
+                &ATTRIBUTE_EXTENDED_FLAGS,
+                &NUMBER_OF_RETURNS,
+                |flags: u16| -> u16 { (flags >> 4) & 0b1111 },
+                true,
+            );
+        } else {
+            converter.set_custom_mapping_with_transformation(
+                &ATTRIBUTE_BASIC_FLAGS,
+                &NUMBER_OF_RETURNS,
+                |flags: u8| -> u8 { (flags >> 3) & 0b111 },
+                false,
+            );
+        }
+    }
+    if target_layout.has_attribute(&CLASSIFICATION_FLAGS) && is_extended {
         converter.set_custom_mapping_with_transformation(
-            &ATTRIBUTE_BASIC_FLAGS,
-            &NUMBER_OF_RETURNS,
-            |flags: u8| -> u8 { (flags >> 3) & 0b111 },
-            false,
+            &ATTRIBUTE_EXTENDED_FLAGS,
+            &CLASSIFICATION_FLAGS,
+            |flags: u16| -> u16 { (flags >> 8) & 0b1111 },
+            true,
+        );
+    }
+    if target_layout.has_attribute(&SCANNER_CHANNEL) && is_extended {
+        converter.set_custom_mapping_with_transformation(
+            &ATTRIBUTE_EXTENDED_FLAGS,
+            &SCANNER_CHANNEL,
+            |flags: u16| -> u16 { (flags >> 12) & 0b11 },
+            true,
         );
     }
     if target_layout.has_attribute(&SCAN_DIRECTION_FLAG) {
-        converter.set_custom_mapping_with_transformation(
-            &ATTRIBUTE_BASIC_FLAGS,
-            &SCAN_DIRECTION_FLAG,
-            |flags: u8| -> u8 { (flags >> 6) & 1 },
-            false,
-        );
+        if is_extended {
+            converter.set_custom_mapping_with_transformation(
+                &ATTRIBUTE_EXTENDED_FLAGS,
+                &SCAN_DIRECTION_FLAG,
+                |flags: u16| -> u16 { (flags >> 14) & 1 },
+                true,
+            );
+        } else {
+            converter.set_custom_mapping_with_transformation(
+                &ATTRIBUTE_BASIC_FLAGS,
+                &SCAN_DIRECTION_FLAG,
+                |flags: u8| -> u8 { (flags >> 6) & 1 },
+                false,
+            );
+        }
     }
     if target_layout.has_attribute(&EDGE_OF_FLIGHT_LINE) {
-        converter.set_custom_mapping_with_transformation(
-            &ATTRIBUTE_BASIC_FLAGS,
-            &EDGE_OF_FLIGHT_LINE,
-            |flags: u8| -> u8 { (flags >> 7) & 1 },
-            false,
-        );
+        if is_extended {
+            converter.set_custom_mapping_with_transformation(
+                &ATTRIBUTE_EXTENDED_FLAGS,
+                &EDGE_OF_FLIGHT_LINE,
+                |flags: u16| -> u16 { (flags >> 15) & 1 },
+                true,
+            );
+        } else {
+            converter.set_custom_mapping_with_transformation(
+                &ATTRIBUTE_BASIC_FLAGS,
+                &EDGE_OF_FLIGHT_LINE,
+                |flags: u8| -> u8 { (flags >> 7) & 1 },
+                false,
+            );
+        }
     }
 
     Ok(converter)
