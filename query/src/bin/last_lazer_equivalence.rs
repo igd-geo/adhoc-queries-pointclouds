@@ -8,11 +8,11 @@ use pasture_core::containers::{
 use pasture_io::base::{read_all, PointReader};
 
 const LAS_PATH: &str =
-    "/Users/pbormann/data/geodata/pointclouds/datasets/district_of_columbia/1321_1.las";
+    "/Users/pbormann/data/geodata/pointclouds/datasets/district_of_columbia/1321.las";
 const LAST_PATH: &str =
-    "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/last/1321_1.last";
+    "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/last/1321.last";
 const LAZER_PATH: &str =
-    "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/lazer/1321_1.lazer";
+    "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/lazer/1321.lazer";
 
 fn main() -> Result<()> {
     let las_points = read_all::<VectorBuffer, _>(LAS_PATH)?;

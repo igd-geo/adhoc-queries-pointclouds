@@ -5,6 +5,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use clap::Parser;
 use experiment_archiver::{Experiment, VariableTemplate};
 use geo::MultiPolygon;
 use log::info;
@@ -26,25 +27,16 @@ use query::{
 };
 use shapefile::{Shape, ShapeReader};
 
-const DATASET_DOC_LAS_PATH: &str =
-    "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/las";
-const DATASET_DOC_LAST_PATH: &str =
-    "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/last";
-const DATASET_DOC_LAZ_PATH: &str =
-    "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/laz";
-const DATASET_DOC_LAZER_PATH: &str =
-    "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/lazer";
-
 const DOC_SHAPEFILE_SMALL_POLY_WITH_HOLES_PATH: &str =
-    "/Users/pbormann/data/projects/progressive_indexing/queries/doc_polygon_small_with_holes_1.shp";
+    "doc_polygon_small_with_holes_1.shp";
 const DOC_SHAPEFILE_SMALL_RECT: &str =
-    "/Users/pbormann/data/projects/progressive_indexing/queries/doc_polygon_small.shp";
+    "doc_polygon_small.shp";
 const DOC_SHAPEFILE_SMALL_POLY: &str =
-    "/Users/pbormann/data/projects/progressive_indexing/queries/doc_polygon_small_2.shp";
+    "doc_polygon_small_2.shp";
 const DOC_SHAPEFILE_LARGE_RECT_1: &str =
-    "/Users/pbormann/data/projects/progressive_indexing/queries/doc_polygon_large_1.shp";
+    "doc_polygon_large_1.shp";
 const DOC_SHAPEFILE_LARGE_RECT_2: &str =
-    "/Users/pbormann/data/projects/progressive_indexing/queries/doc_rect_large_1.shp";
+    "doc_rect_large_1.shp";
 
 const VARIABLE_DATASET: VariableTemplate = VariableTemplate::new(
     Cow::Borrowed("Dataset"),
@@ -83,6 +75,13 @@ const VARIABLE_PURGE_CACHE: VariableTemplate = VariableTemplate::new(
     Cow::Borrowed("Is the disk cache being purged before each run of the experiment?"),
     Cow::Borrowed("bool"),
 );
+
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    data_path: PathBuf,
+    shapefiles_path: PathBuf,
+}
 
 fn flush_disk_cache() -> Result<()> {
     let sync_output = Command::new("sync")
@@ -176,13 +175,13 @@ fn run_query(params: QueryParams, run_number: usize, total_runs: usize,) -> Resu
 }
 
 /// Returns a collection of queries for the experiment with the district of columbia dataset
-fn experiment_queries_doc() -> Result<Vec<QueryExpression>> {
-    let small_rect_query = crude_shapefile_parsing(DOC_SHAPEFILE_SMALL_RECT)?;
-    let small_poly_query = crude_shapefile_parsing(DOC_SHAPEFILE_SMALL_POLY)?;
+fn experiment_queries_doc(args: &Args) -> Result<Vec<QueryExpression>> {
+    let small_rect_query = crude_shapefile_parsing(args.shapefiles_path.join(DOC_SHAPEFILE_SMALL_RECT))?;
+    let small_poly_query = crude_shapefile_parsing(args.shapefiles_path.join(DOC_SHAPEFILE_SMALL_POLY))?;
     let small_poly_with_holes_query =
-        crude_shapefile_parsing(DOC_SHAPEFILE_SMALL_POLY_WITH_HOLES_PATH)?;
-    let large_rect_query_1 = crude_shapefile_parsing(DOC_SHAPEFILE_LARGE_RECT_1)?;
-    let large_rect_query_2 = crude_shapefile_parsing(DOC_SHAPEFILE_LARGE_RECT_2)?;
+        crude_shapefile_parsing(args.shapefiles_path.join(DOC_SHAPEFILE_SMALL_POLY_WITH_HOLES_PATH))?;
+    let large_rect_query_1 = crude_shapefile_parsing(args.shapefiles_path.join(DOC_SHAPEFILE_LARGE_RECT_1))?;
+    let large_rect_query_2 = crude_shapefile_parsing(args.shapefiles_path.join(DOC_SHAPEFILE_LARGE_RECT_2))?;
 
     let aabb_large = QueryExpression::Atomic(AtomicExpression::Within(
         Value::Position(Position(Vector3::new(390000.0, 130000.0, 0.0)))
@@ -278,23 +277,25 @@ fn main() -> Result<()> {
     dotenv::dotenv().context("Failed to initialize with .env file")?;
     pretty_env_logger::init();
 
+    let args = Args::parse();
+
     info!("Ad-hoc query experiment - doc dataset");
 
     let machine = std::env::var("MACHINE").context("To run experiments, please set the 'MACHINE' environment variable to the name of the machine that you are running this experiment on. This is required so that experiment data can be mapped to the actual machine that ran the experiment. This will typically be the name or system configuration of the computer that runs the experiment.")?;
 
     let doc_queries =
-        experiment_queries_doc().context("Failed to build queries for doc dataset")?;
+        experiment_queries_doc(&args).context("Failed to build queries for doc dataset")?;
 
-    let las_files = get_files_with_extension("las", DATASET_DOC_LAS_PATH);
-    let last_files = get_files_with_extension("last", DATASET_DOC_LAST_PATH);
-    let laz_files = get_files_with_extension("laz", DATASET_DOC_LAZ_PATH);
-    let lazer_files = get_files_with_extension("lazer", DATASET_DOC_LAZER_PATH);
+    let las_files = get_files_with_extension("las", &args.data_path.join("doc/las"));
+    let last_files = get_files_with_extension("last", &args.data_path.join("doc/last"));
+    let laz_files = get_files_with_extension("laz", &args.data_path.join("doc/laz"));
+    let lazer_files = get_files_with_extension("lazer", &args.data_path.join("doc/lazer"));
 
     let doc_datasets = [
-        ("las", las_files),
-        ("last", last_files),
-        ("laz", laz_files),
-        ("lazer", lazer_files),
+        ("LAS", las_files),
+        ("LAST", last_files),
+        ("LAZ", laz_files),
+        ("LAZER", lazer_files),
     ];
 
     let output_point_layouts = [
@@ -351,7 +352,7 @@ fn main() -> Result<()> {
                     experiment.run(|run_context| {
                         let (query_stats, output_stats) = run_query(params, current_run, total_runs).context("Executing query failed")?;
                         
-                        run_context.add_value_by_name(VARIABLE_DATASET.name(), format!("doc {file_format}"));
+                        run_context.add_value_by_name(VARIABLE_DATASET.name(), format!("DoC {file_format}"));
                         run_context.add_value_by_name(VARIABLE_MACHINE.name(), machine.as_str());
                         run_context.add_value_by_name(VARIABLE_RUNTIME.name(), query_stats.runtime.as_millis());
                         run_context.add_value_by_name(VARIABLE_BYTES_WRITTEN.name(), output_stats.bytes_written);

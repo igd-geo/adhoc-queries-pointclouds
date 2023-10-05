@@ -230,14 +230,6 @@ impl<R: Read + Seek + Send> PointReader for LASTReader<R> {
 
             let target_layout = point_buffer.point_layout().clone();
 
-            if self.las_metadata.point_format().is_extended {
-                // TODO Converter currently doesn't support applying the transformation to the SOURCE attribute,
-                // which is a problem for extended formats, where the flags are u16, but the resulting types
-                // are u8. Since the transformation is applied AFTER conversion from u16 to u8, the necessary
-                // bytes for some of the flags are truncated...
-                bail!("LAST files with extended point record format currently unsupported");
-            }
-
             let raw_las_header = self
                 .las_metadata
                 .raw_las_header()
@@ -305,7 +297,7 @@ mod tests {
     #[test]
     fn test_las_last_roundtrip() -> Result<()> {
         let in_file_path =
-            "/Users/pbormann/data/geodata/pointclouds/datasets/district_of_columbia/1318_1.las";
+            "/Users/pbormann/data/geodata/pointclouds/datasets/district_of_columbia/1318.las";
 
         let las_file_bytes = std::fs::read(in_file_path)?;
         let (las_points, header) = {
