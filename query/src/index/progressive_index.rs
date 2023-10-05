@@ -19,6 +19,7 @@ use anyhow::{anyhow, bail, Context, Result};
 use log::info;
 use pasture_core::{
     layout::attributes::{GPS_TIME, NUMBER_OF_RETURNS, RETURN_NUMBER},
+    math::AABB,
     meta::Metadata,
 };
 use pasture_io::las::{ATTRIBUTE_BASIC_FLAGS, ATTRIBUTE_EXTENDED_FLAGS};
@@ -28,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     ffi::OsStr,
+    fmt::Display,
     path::{Path, PathBuf},
     sync::atomic::{AtomicUsize, Ordering},
     time::Instant,
@@ -50,6 +52,35 @@ pub struct RoughQueryResult {
     matching_blocks: FxHashMap<usize, Vec<(PointRange, IndexResult)>>,
     /// Set of blocks for each ValueType that are candidates for index refinement
     blocks_for_refinement: FxHashMap<ValueType, FxHashSet<PointRange>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct DatasetStats {
+    num_files: usize,
+    num_points: usize,
+    bounds: Option<AABB<f64>>,
+}
+
+impl Display for DatasetStats {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        writeln!(f, "Number of files:   {}", self.num_files)?;
+        writeln!(f, "Number of points:  {}", self.num_points)?;
+        if let Some(bounds) = self.bounds.as_ref() {
+            writeln!(
+                f,
+                "Bounds:            ({}, {}, {}) ({}, {}, {})",
+                bounds.min().x,
+                bounds.min().y,
+                bounds.min().z,
+                bounds.max().x,
+                bounds.max().y,
+                bounds.max().z
+            )?;
+        } else {
+            writeln!(f, "Bounds:            Unknown")?;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Serialize, Deserialize)]
@@ -79,6 +110,10 @@ impl KnownDataset {
     /// Access to the indices of this dataset
     pub fn indices(&self) -> &FxHashMap<ValueType, BlockIndex> {
         &self.indices
+    }
+
+    pub fn file_paths(&self) -> &[PathBuf] {
+        &self.files
     }
 
     /// Apply the given range of IndexRefinements to the indices of this dataset
@@ -151,6 +186,38 @@ impl ProgressiveIndex {
             },
         );
         Ok(id)
+    }
+
+    /// Information about the dataset, i.e. how many points, bounds etc.
+    pub fn dataset_stats(&self, dataset_id: DatasetID) -> DatasetStats {
+        let mut num_points: usize = 0;
+        let mut global_bounds: Option<AABB<f64>> = None;
+
+        let num_files = self
+            .datasets
+            .get(&dataset_id)
+            .expect("Unknown dataset")
+            .file_paths()
+            .len();
+        for idx in 0..num_files {
+            let las_metadata = self
+                .input_layer
+                .get_las_metadata(FileHandle(dataset_id, idx))
+                .expect("Stats are only supported for LAS-like files");
+            let bounds = las_metadata.bounds().expect("No bounds found");
+            num_points += las_metadata.point_count();
+            if let Some(current_bounds) = global_bounds {
+                global_bounds = Some(AABB::union(&current_bounds, &bounds));
+            } else {
+                global_bounds = Some(bounds);
+            }
+        }
+
+        DatasetStats {
+            num_files,
+            num_points,
+            bounds: global_bounds,
+        }
     }
 
     /// Run a query on the ProgressiveIndex for the given dataset. The resulting points of the query are collected by

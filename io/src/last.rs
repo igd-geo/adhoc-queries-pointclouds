@@ -45,7 +45,11 @@ pub fn las_to_last<R: Read + Seek + Send>(
     const CHUNK_SIZE: usize = 1 << 20;
     let mut chunk_buffer =
         vec![0; CHUNK_SIZE * raw_las_point_layout.size_of_point_entry() as usize];
-    let num_points = header.number_of_point_records as usize;
+    let num_points = if let Some(large_file) = header.large_file.as_ref() {
+        large_file.number_of_point_records as usize
+    } else {
+        header.number_of_point_records as usize
+    };
 
     let num_chunks = (num_points + CHUNK_SIZE - 1) / CHUNK_SIZE;
     for chunk_id in 0..num_chunks {

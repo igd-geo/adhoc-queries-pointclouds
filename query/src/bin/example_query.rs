@@ -22,7 +22,7 @@ use query::{
         NoRefinementStrategy, NumberOfReturns, Position, ProgressiveIndex, QueryExpression,
         ReturnNumber, Value,
     },
-    io::{LASOutput, NullOutput, StdoutOutput},
+    io::{CountOutput, LASOutput, NullOutput, StdoutOutput},
 };
 use shapefile::{Shape, ShapeReader};
 use walkdir::WalkDir;
@@ -59,7 +59,7 @@ fn get_query() -> QueryExpression {
     ));
     let _doc_aabb_complete = QueryExpression::Atomic(AtomicExpression::Within(
         Value::Position(Position(Vector3::new(389400.0, 124200.0, -94.88)))
-            ..Value::Position(Position(Vector3::new(406200.0, 148200.0, 760.03))),
+            ..Value::Position(Position(Vector3::new(408599.99, 148199.99, 760.03))),
     ));
 
     let _all_buildings = QueryExpression::Atomic(AtomicExpression::Compare((
@@ -142,6 +142,9 @@ fn main() -> Result<()> {
     let mut progressive_index = ProgressiveIndex::new();
     let dataset_id = progressive_index.add_dataset(paths.as_slice())?;
 
+    let stats = progressive_index.dataset_stats(dataset_id);
+    eprintln!("Stats:\n{stats}");
+
     // let output = LASOutput::new(
     //     "example_query_output_shape_from_laz.las",
     //     &point_layout_from_las_point_format(&Format::new(0)?, false)?,
@@ -156,13 +159,14 @@ fn main() -> Result<()> {
         .collect(),
         false,
     );
+    let output = CountOutput::default();
     // let output = NullOutput::default();
 
-    let query = get_query();
-    eprintln!("Query: {query}");
-    let stats = progressive_index.query(dataset_id, query, &NoRefinementStrategy, &output)?;
+    // let query = get_query();
+    // eprintln!("Query: {query}");
+    // let stats = progressive_index.query(dataset_id, query, &NoRefinementStrategy, &output)?;
 
-    eprintln!("{}", stats);
+    // eprintln!("{}", stats);
 
     Ok(())
 }

@@ -6,6 +6,7 @@ use std::{
 };
 
 use anyhow::{bail, Context, Result};
+use clap::Parser;
 use colored::Colorize;
 use geo::{Contains, MultiPolygon};
 use pasture_core::{
@@ -25,17 +26,24 @@ use query::{
 use rayon::prelude::*;
 use shapefile::{Shape, ShapeReader};
 
-const DATASET_DOC_LAS_PATH: &str =
-    "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/las";
-const DATASET_DOC_LAST_PATH: &str =
-    "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/last";
-const DATASET_DOC_LAZ_PATH: &str =
-    "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/laz";
-const DATASET_DOC_LAZER_PATH: &str =
-    "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/lazer";
+// const DATASET_DOC_LAS_PATH: &str =
+//     "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/las";
+// const DATASET_DOC_LAST_PATH: &str =
+//     "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/last";
+// const DATASET_DOC_LAZ_PATH: &str =
+//     "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/laz";
+// const DATASET_DOC_LAZER_PATH: &str =
+//     "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/lazer";
 
-const DOC_SHAPEFILE_SMALL_WITH_HOLES_PATH: &str =
-    "/Users/pbormann/data/projects/progressive_indexing/queries/doc_polygon_small_with_holes_1.shp";
+// const DOC_SHAPEFILE_SMALL_WITH_HOLES_PATH: &str =
+//     "/Users/pbormann/data/projects/progressive_indexing/queries/doc_polygon_small_with_holes_1.shp";
+
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    data_path: PathBuf,
+    shapefile_path: PathBuf,
+}
 
 fn get_compare_func<T: PartialEq + PartialOrd + Copy>(
     expr: &CompareExpression,
@@ -277,7 +285,7 @@ fn crude_shapefile_parsing(path: impl AsRef<Path>) -> Result<QueryExpression> {
     }
 }
 
-fn test_queries_doc() -> Vec<QueryExpression> {
+fn test_queries_doc(shapefile_path: &Path) -> Vec<QueryExpression> {
     let aabb_large = QueryExpression::Atomic(AtomicExpression::Within(
         Value::Position(Position(Vector3::new(390000.0, 130000.0, 0.0)))
             ..Value::Position(Position(Vector3::new(400000.0, 140000.0, 200.0))),
@@ -319,8 +327,7 @@ fn test_queries_doc() -> Vec<QueryExpression> {
         Value::GpsTime(GpsTime(207011500.0))..Value::GpsTime(GpsTime(207012000.0)),
     ));
 
-    let polygon_small = crude_shapefile_parsing(DOC_SHAPEFILE_SMALL_WITH_HOLES_PATH)
-        .expect("Could not parse shapefile");
+    let polygon_small = crude_shapefile_parsing(shapefile_path).expect("Could not parse shapefile");
 
     let buildings_and_first_returns = QueryExpression::And(
         Box::new(class_buildings.clone()),
@@ -347,12 +354,14 @@ fn test_queries_doc() -> Vec<QueryExpression> {
 }
 
 fn assert_correctness_with_doc_dataset() -> Result<()> {
-    let queries = test_queries_doc();
+    let args = Args::parse();
 
-    let las_files = get_files_with_extension("las", DATASET_DOC_LAS_PATH);
-    let last_files = get_files_with_extension("last", DATASET_DOC_LAST_PATH);
-    let laz_files = get_files_with_extension("laz", DATASET_DOC_LAZ_PATH);
-    let lazer_files = get_files_with_extension("lazer", DATASET_DOC_LAZER_PATH);
+    let queries = test_queries_doc(&args.shapefile_path);
+
+    let las_files = get_files_with_extension("las", &args.data_path.join("doc/las"));
+    let last_files = get_files_with_extension("last", &args.data_path.join("doc/last"));
+    let laz_files = get_files_with_extension("laz", &args.data_path.join("doc/laz"));
+    let lazer_files = get_files_with_extension("lazer", &args.data_path.join("doc/lazer"));
 
     struct ReportEntry {
         file_format: &'static str,
@@ -365,10 +374,10 @@ fn assert_correctness_with_doc_dataset() -> Result<()> {
         let query_clone = query.clone();
         let expected_num_matches = apply_query_to_las_dataset(&query, &las_files)?;
         let report_entries = [
-            // (las_files.as_slice(), "las"),
+            (las_files.as_slice(), "las"),
             (last_files.as_slice(), "last"),
-            // (laz_files.as_slice(), "laz"),
-            // (lazer_files.as_slice(), "lazer"),
+            (laz_files.as_slice(), "laz"),
+            (lazer_files.as_slice(), "lazer"),
         ]
         .into_par_iter()
         .map(move |(files, extension)| -> Result<ReportEntry> {

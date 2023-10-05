@@ -3,6 +3,7 @@ use std::{
     fs::File,
     io::{BufWriter, Cursor},
     path::{Path, PathBuf},
+    sync::atomic::{AtomicUsize, Ordering},
 };
 
 use anyhow::{bail, Context, Result};
@@ -16,6 +17,7 @@ use pasture_io::{
     las::point_layout_from_las_point_format,
     las_rs::{point::Format, raw, Builder},
 };
+use rayon::prelude::*;
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -140,19 +142,30 @@ fn main() -> Result<()> {
     encoder_builder.level(args.compression_level);
     info!("LZ4 parameters: {:#?}", encoder_builder);
 
-    for (file_number, (in_file, out_file)) in input_output_file_pairs.iter().enumerate() {
-        if !is_las_file(&in_file) {
-            bail!("Found non-LAS file {}", in_file.display());
-        }
+    let num_files_processed = AtomicUsize::default();
+    input_output_file_pairs
+        .par_iter()
+        .map(|(in_file, out_file)| {
+            if !is_las_file(&in_file) {
+                bail!("Found non-LAS file {}", in_file.display());
+            }
 
-        info!("{file_number:4} / {:4}", input_output_file_pairs.len());
+            let global_file_number = num_files_processed.fetch_add(1, Ordering::SeqCst);
+            info!(
+                "{global_file_number:4} / {:4}",
+                input_output_file_pairs.len()
+            );
 
-        las_to_lazer(&in_file, &out_file, encoder_builder.clone()).with_context(|| {
-            format!(
-                "Could not convert file {} to LAZER format",
-                in_file.display()
-            )
-        })?;
-    }
+            las_to_lazer(&in_file, &out_file, encoder_builder.clone()).with_context(|| {
+                format!(
+                    "Could not convert file {} to LAZER format",
+                    in_file.display()
+                )
+            })?;
+
+            Ok(())
+        })
+        .collect::<Result<()>>()?;
+
     Ok(())
 }
