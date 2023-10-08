@@ -822,7 +822,7 @@ dependencies = [
  "rand",
  "serde",
  "serde_json",
- "tabled",
+ "tabled 0.12.2",
 ]
 
 [[package]]
@@ -2014,6 +2014,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "papergrid"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a2ccbe15f2b6db62f9a9871642746427e297b0ceb85f9a7f1ee5ff47d184d0c8"
+dependencies = [
+ "bytecount",
+ "fnv",
+ "unicode-width",
+]
+
+[[package]]
 name = "parking_lot"
 version = "0.12.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2344,6 +2355,7 @@ dependencies = [
  "serde",
  "shapefile",
  "statrs",
+ "tabled 0.14.0",
  "tracy-client",
  "typetag",
  "walkdir",
@@ -2908,7 +2920,18 @@ version = "0.12.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0ce69a5028cd9576063ec1f48edb2c75339fd835e6094ef3e05b3a079bf594a6"
 dependencies = [
- "papergrid",
+ "papergrid 0.9.1",
+ "tabled_derive",
+ "unicode-width",
+]
+
+[[package]]
+name = "tabled"
+version = "0.14.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dfe9c3632da101aba5131ed63f9eed38665f8b3c68703a6bb18124835c1a5d22"
+dependencies = [
+ "papergrid 0.10.0",
  "tabled_derive",
  "unicode-width",
 ]

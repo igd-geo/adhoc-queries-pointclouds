@@ -41,6 +41,7 @@ tracy-client = { version = "0.15.2", default-features = false, features = [] }
 page_size = "0.6.0"
 memmap2 = "0.8.0"
 statrs = "0.16.0"
+tabled = "0.14"
 
 [dev-dependencies]
 regex = "1"

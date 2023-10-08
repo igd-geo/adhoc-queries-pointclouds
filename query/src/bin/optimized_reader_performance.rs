@@ -51,9 +51,19 @@ const VARIABLE_POINT_THROUGHPUT: VariableTemplate = VariableTemplate::new(
     Cow::Borrowed("The number of points read per second"),
     Cow::Borrowed("points/s"),
 );
+const VARIABLE_POINT_THROUGHPUT_ERR: VariableTemplate = VariableTemplate::new(
+    Cow::Borrowed("Throughput (points) error (1 sigma)"),
+    Cow::Borrowed("Standard error for point throughput"),
+    Cow::Borrowed("points/s"),
+);
 const VARIABLE_MEMORY_THROUGHPUT: VariableTemplate = VariableTemplate::new(
     Cow::Borrowed("Throughput (memory)"),
     Cow::Borrowed("The memory throughput, i.e. how many bytes were read per second"),
+    Cow::Borrowed("bytes/s"),
+);
+const VARIABLE_MEMORY_THROUGHPUT_ERR: VariableTemplate = VariableTemplate::new(
+    Cow::Borrowed("Throughput (memory) error (1 sigma)"),
+    Cow::Borrowed("Standard error for memory throughput"),
     Cow::Borrowed("bytes/s"),
 );
 const VARIABLE_LOADED_ATTRIBUTES: VariableTemplate = VariableTemplate::new(
@@ -356,16 +366,57 @@ fn run_experiment(
         .expect("Could not calculate runtime standard deviation")
         * 1000.0;
 
+    let point_throughputs = Data::new(
+        stats_per_run
+            .iter()
+            .map(|stat| stat.points_per_second)
+            .collect_vec(),
+    );
+    let mean_point_throughput = point_throughputs
+        .mean()
+        .expect("Could not calculate mean point throughput")
+        as usize;
+    let stddev_point_throughput = point_throughputs.std_dev().unwrap() as usize;
+
+    let memory_throghputs = Data::new(
+        stats_per_run
+            .iter()
+            .map(|stat| stat.bytes_per_second)
+            .collect_vec(),
+    );
+    let mean_memory_throughput = memory_throghputs
+        .mean()
+        .expect("Could not calculate mean memory throughput")
+        as usize;
+    let stddev_memory_throughput = memory_throghputs.std_dev().unwrap() as usize;
+
     let stats = stats_per_run[0].clone();
 
     experiment.run(|context| {
         context.add_value_by_name(VARIABLE_DATASET.name(), stats.dataset);
         context.add_value_by_name(VARIABLE_MACHINE.name(), machine);
-        context.add_value_by_name(VARIABLE_MEMORY_THROUGHPUT.name(), stats.bytes_per_second);
+        context.add_value_by_name(
+            VARIABLE_MEMORY_THROUGHPUT.name(),
+            format!("{mean_memory_throughput}"),
+        );
+        context.add_value_by_name(
+            VARIABLE_MEMORY_THROUGHPUT_ERR.name(),
+            format!("{stddev_memory_throughput}"),
+        );
         context.add_value_by_name(VARIABLE_NR_POINTS.name(), stats.number_of_points);
-        context.add_value_by_name(VARIABLE_POINT_THROUGHPUT.name(), stats.points_per_second);
-        context.add_value_by_name(VARIABLE_RUNTIME.name(), mean_runtime_ms.to_string());
-        context.add_value_by_name(VARIABLE_RUNTIME_ERR.name(), stddev_runtime_ms.to_string());
+        context.add_value_by_name(
+            VARIABLE_POINT_THROUGHPUT.name(),
+            format!("{mean_point_throughput}"),
+        );
+        context.add_value_by_name(
+            VARIABLE_POINT_THROUGHPUT_ERR.name(),
+            format!("{stddev_point_throughput}"),
+        );
+        context.add_value_by_name(VARIABLE_RUNTIME.name(), format!("{mean_runtime_ms:.3}"));
+        context.add_value_by_name(
+            VARIABLE_RUNTIME_ERR.name(),
+            format!("{stddev_runtime_ms:.3}"),
+        );
 
         let attributes_str = stats
             .point_layout
@@ -399,7 +450,9 @@ fn main() -> Result<()> {
         VARIABLE_RUNTIME_ERR.clone(),
         VARIABLE_NR_POINTS.clone(),
         VARIABLE_POINT_THROUGHPUT.clone(),
+        VARIABLE_POINT_THROUGHPUT_ERR.clone(),
         VARIABLE_MEMORY_THROUGHPUT.clone(),
+        VARIABLE_MEMORY_THROUGHPUT_ERR.clone(),
         VARIABLE_PURGE_CACHE.clone(),
         VARIABLE_MACHINE.clone(),
         VARIABLE_LOADED_ATTRIBUTES.clone(),
