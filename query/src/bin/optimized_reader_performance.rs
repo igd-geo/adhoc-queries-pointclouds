@@ -128,6 +128,8 @@ fn reset_page_cache() -> Result<()> {
     Ok(())
 }
 
+/// Read data in the default PointLayout from a LAS file. Default means positions as f64 in world-space and unpacked
+/// bit attributes!
 fn benchmark_las_default_layout(file: &Path, mmapped: bool) -> Result<Stats> {
     let file_size = file
         .metadata()
@@ -140,14 +142,14 @@ fn benchmark_las_default_layout(file: &Path, mmapped: bool) -> Result<Stats> {
     let points = if mmapped {
         let file = File::open(file).context("failed to open file")?;
         let mmap = unsafe { memmap::Mmap::map(&file)? };
-        let mut reader = LASReader::from_read(Cursor::new(&mmap[..]), is_compressed, true)
+        let mut reader = LASReader::from_read(Cursor::new(&mmap[..]), is_compressed, false)
             .context("failed to open LAS reader")?;
         reader
             .read::<VectorBuffer>(reader.remaining_points())
             .context("Failed to read points")?
     } else {
         let file = File::open(file).context("failed to open file")?;
-        let mut reader = LASReader::from_read(BufReader::new(file), is_compressed, true)
+        let mut reader = LASReader::from_read(BufReader::new(file), is_compressed, false)
             .context("failed to open LAS reader")?;
         reader
             .read::<VectorBuffer>(reader.remaining_points())
@@ -471,12 +473,20 @@ fn main() -> Result<()> {
 
     let mmapped = [false, true];
 
+    let matching_memory_layout = {
+        let reader = LASReader::from_path(&args.input_file, true)?;
+        reader.get_default_point_layout().clone()
+    };
     let only_positions_layout = [ATTRIBUTE_LOCAL_LAS_POSITION]
         .into_iter()
         .collect::<PointLayout>();
     let only_classifications_layout = [CLASSIFICATION].into_iter().collect::<PointLayout>();
 
-    let custom_layouts = [only_positions_layout, only_classifications_layout];
+    let custom_layouts = [
+        matching_memory_layout,
+        only_positions_layout,
+        only_classifications_layout,
+    ];
 
     match extension.as_ref() {
         "las" => {
