@@ -21,7 +21,7 @@ use pasture_core::{
 };
 use pasture_io::{
     base::PointReader,
-    las::{LASReader, ATTRIBUTE_LOCAL_LAS_POSITION},
+    las::{point_layout_from_las_metadata, LASReader, ATTRIBUTE_LOCAL_LAS_POSITION},
 };
 use statrs::statistics::{Data, Distribution};
 
@@ -144,15 +144,17 @@ fn benchmark_las_default_layout(file: &Path, mmapped: bool) -> Result<Stats> {
         let mmap = unsafe { memmap::Mmap::map(&file)? };
         let mut reader = LASReader::from_read(Cursor::new(&mmap[..]), is_compressed, false)
             .context("failed to open LAS reader")?;
+        // Read into HashMapBuffer instead of VectorBuffer because this is faster with layout conversion, and it is the
+        // same thing we do in the `reader_performance` experiment!
         reader
-            .read::<VectorBuffer>(reader.remaining_points())
+            .read::<HashMapBuffer>(reader.remaining_points())
             .context("Failed to read points")?
     } else {
         let file = File::open(file).context("failed to open file")?;
         let mut reader = LASReader::from_read(BufReader::new(file), is_compressed, false)
             .context("failed to open LAS reader")?;
         reader
-            .read::<VectorBuffer>(reader.remaining_points())
+            .read::<HashMapBuffer>(reader.remaining_points())
             .context("Failed to read points")?
     };
     let runtime = timer.elapsed();
@@ -195,6 +197,10 @@ fn benchmark_las_pasture_custom_layout(
         let mut reader = LASReader::from_read(Cursor::new(&mmap[..]), is_compressed, true)
             .context("failed to open LAS reader")?;
         let num_points = reader.remaining_points();
+        // Here we read into a VectorBuffer instead of a HashMapBuffer because this will be faster if we don't need
+        // layout conversions, which (contrary to the name of the method) is what is going on here: We read in the default
+        // memory layout, or a subset of it. Technically, for the subsets a HashMapBuffer _might_ be faster, but we want
+        // to stay consistent. Also, the current custom layouts only include 1 attribute, so it makes no difference
         let mut points = VectorBuffer::with_capacity(num_points, custom_layout.clone());
         points.resize(num_points);
         reader
@@ -246,16 +252,26 @@ fn benchmark_last_pasture_default_layout(file: &Path, mmapped: bool) -> Result<S
         let mmap = unsafe { memmap::Mmap::map(&file)? };
         let mut reader =
             LASTReader::from_read(Cursor::new(&mmap[..])).context("failed to open LAST reader")?;
+        let layout = point_layout_from_las_metadata(reader.las_metadata(), false)?;
+        let num_points = reader.remaining_points();
+        let mut points = HashMapBuffer::with_capacity(num_points, layout);
+        points.resize(num_points);
         reader
-            .read::<HashMapBuffer>(reader.remaining_points())
-            .context("Failed to read points")?
+            .read_into(&mut points, num_points)
+            .context("Failed to read points")?;
+        points
     } else {
         let file = File::open(file).context("failed to open file")?;
         let mut reader =
             LASTReader::from_read(BufReader::new(file)).context("failed to open LAST reader")?;
+        let layout = point_layout_from_las_metadata(reader.las_metadata(), false)?;
+        let num_points = reader.remaining_points();
+        let mut points = HashMapBuffer::with_capacity(num_points, layout);
+        points.resize(num_points);
         reader
-            .read::<HashMapBuffer>(reader.remaining_points())
-            .context("Failed to read points")?
+            .read_into(&mut points, num_points)
+            .context("Failed to read points")?;
+        points
     };
     let runtime = timer.elapsed();
 
