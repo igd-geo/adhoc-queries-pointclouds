@@ -1,7 +1,6 @@
 use std::{fmt::Display, ops::Range, path::PathBuf};
 
-use anyhow::{Context, Result};
-use divide_range::RangeDivisions;
+use anyhow::Result;
 use geo::{coord, Intersects, Contains};
 use itertools::Itertools;
 use pasture_core::{
@@ -117,12 +116,18 @@ impl Index for PositionIndex {
             AtomicExpression::Within(range) => {
                 match (range.start, range.end) {
                     (Value::Position(min_pos), Value::Position(max_pos)) => self.within(&min_pos.0, &max_pos.0),
-                    (other_start, other_end) => panic!("Encountered invalid values for range of 'Within' expression. Expected (Position, Position) but got ({},{}) instead", other_start.value_type(), other_end.value_type()),
+                    (Value::LOD(_), Value::LOD(_)) => IndexResult::MatchSome,
+                    (other_start, other_end) => panic!("Encountered invalid values ({},{}) for range of 'Within' expression", other_start.value_type(), other_end.value_type()),
                 }
             },
+            AtomicExpression::Compare((_, value)) => {
+                match value {
+                    Value::LOD(_) => IndexResult::MatchSome,
+                    other => panic!("Encountered invalid value {other} for 'Compare' expression"),
+                }
+            }
             AtomicExpression::Intersects(geometry) => 
                 self.intersects(geometry),
-            other => panic!("Unsupported query expression {other:#?} for PositionIndex"),
         }
     }
 

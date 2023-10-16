@@ -32,7 +32,7 @@ human-repr = "1"
 scopeguard = "1.1.0"
 typetag = "0.2"
 rand = "0.8.5"
-experiment-archiver = { git = "https://github.com/Mortano/experiment-archiver-rs" }
+exar = { path = "/Users/pbormann/dev/proj_int/phd-experiment-base/exar" }
 bytemuck = {version = "1.13", features = ["derive"] }
 ouroboros = "0.17.2"
 geo = "0.26.0"
@@ -42,6 +42,8 @@ page_size = "0.6.0"
 memmap2 = "0.8.0"
 statrs = "0.16.0"
 tabled = "0.14"
+tokio = { version = "1", features = ["full"] }
+postgres = {version = "0.19" }
 
 [dev-dependencies]
 regex = "1"

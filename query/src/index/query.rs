@@ -118,6 +118,8 @@ pub struct ReturnNumber(pub u8);
 pub struct NumberOfReturns(pub u8);
 #[derive(Copy, Clone, Debug)]
 pub struct GpsTime(pub f64);
+#[derive(Copy, Clone, Debug)]
+pub struct DiscreteLod(pub usize);
 
 // TODO LOD (discrete? continuous?)
 
@@ -128,6 +130,7 @@ pub enum Value {
     ReturnNumber(ReturnNumber),
     NumberOfReturns(NumberOfReturns),
     GpsTime(GpsTime),
+    LOD(DiscreteLod),
     // TODO Add something like 'DynamicValue' for values that are to be computed at runtime. The value has to refer
     // to the ValueType of all the actual values that it requires for the computation
 }
@@ -140,6 +143,7 @@ impl Value {
             Value::GpsTime(_) => ValueType::GpsTime,
             Value::ReturnNumber(_) => ValueType::ReturnNumber,
             Value::NumberOfReturns(_) => ValueType::NumberOfReturns,
+            Value::LOD(_) => ValueType::Position3D,
         }
     }
 }
@@ -158,6 +162,7 @@ impl Display for Value {
             Value::ReturnNumber(return_number) => write!(f, "ReturnNumber({})", return_number.0),
             Value::NumberOfReturns(nr_returns) => write!(f, "NumberOfReturns({})", nr_returns.0),
             Value::GpsTime(gps_time) => write!(f, "GPSTime({})", gps_time.0),
+            Value::LOD(level) => write!(f, "LOD({})", level.0),
         }
     }
 }

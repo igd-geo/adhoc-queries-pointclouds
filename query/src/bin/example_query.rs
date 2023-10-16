@@ -18,7 +18,7 @@ use pasture_io::{
 };
 use query::{
     index::{
-        AtomicExpression, Classification, CompareExpression, Geometry, GpsTime,
+        AtomicExpression, Classification, CompareExpression, DiscreteLod, Geometry, GpsTime,
         NoRefinementStrategy, NumberOfReturns, Position, ProgressiveIndex, QueryExpression,
         ReturnNumber, Value,
     },
@@ -90,7 +90,17 @@ fn get_query() -> QueryExpression {
         Value::GpsTime(GpsTime(207011500.0))..Value::GpsTime(GpsTime(207012000.0)),
     ));
 
+    let lod0 = QueryExpression::Atomic(AtomicExpression::Compare((
+        CompareExpression::Equals,
+        Value::LOD(DiscreteLod(0)),
+    )));
+    let lod2 = QueryExpression::Atomic(AtomicExpression::Compare((
+        CompareExpression::Equals,
+        Value::LOD(DiscreteLod(2)),
+    )));
+
     _all_buildings
+    // _all_buildings
     // QueryExpression::And(
     //     Box::new(maybe_vegetation.clone()),
     //     Box::new(_doc_polygon_small.clone()),
@@ -145,28 +155,29 @@ fn main() -> Result<()> {
     let stats = progressive_index.dataset_stats(dataset_id);
     eprintln!("Stats:\n{stats}");
 
-    // let output = LASOutput::new(
-    //     "example_query_output_shape_from_laz.las",
-    //     &point_layout_from_las_point_format(&Format::new(0)?, false)?,
-    // )?;
-    let output = StdoutOutput::new(
-        // point_layout_from_las_point_format(&Format::new(1)?, true)?,
-        [
-            POSITION_3D.with_custom_datatype(PointAttributeDataType::Vec3i32),
-            CLASSIFICATION,
-        ]
-        .into_iter()
-        .collect(),
-        false,
-    );
+    let output = LASOutput::new(
+        "doc_buildings.las",
+        &point_layout_from_las_point_format(&Format::new(6)?, false)?,
+    )?;
+    // let output = StdoutOutput::new(
+    //     point_layout_from_las_point_format(&Format::new(6)?, true)?,
+    //     // [
+    //     //     POSITION_3D.with_custom_datatype(PointAttributeDataType::Vec3i32),
+    //     //     CLASSIFICATION,
+    //     // ]
+    //     // .into_iter()
+    //     // .collect(),
+    //     true,
+    // );
     let output = CountOutput::default();
     // let output = NullOutput::default();
 
-    // let query = get_query();
-    // eprintln!("Query: {query}");
-    // let stats = progressive_index.query(dataset_id, query, &NoRefinementStrategy, &output)?;
+    let query = get_query();
+    eprintln!("Query: {shapefile_query}");
+    let stats =
+        progressive_index.query(dataset_id, shapefile_query, &NoRefinementStrategy, &output)?;
 
-    // eprintln!("{}", stats);
+    eprintln!("{}", stats);
 
     Ok(())
 }

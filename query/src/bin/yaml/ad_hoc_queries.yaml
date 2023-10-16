@@ -1,0 +1,38 @@
+name: Ad-hoc queries
+description: "Runs various queries using the ad-hoc query engine and measures their throughput and responsiveness"
+researchers:
+- Pascal Bormann
+input_variables:
+- name: Dataset
+  description: The dataset used in this experiment
+  data_type: Label
+- name: Machine
+  description: The machine that the experiment is run on
+  data_type: Label
+- name: System
+  description: Which system was used for answering the queries? Ad-hoc query engine, PostGIS etc.
+  data_type: Label
+- name: Query
+  description: The query that was executed
+  data_type: Label
+- name: Output attributes
+  description: The point attributes that the query extracted from the data
+  data_type: Text
+- name: Purge cache
+  description: Purge the disk cache before running the experiment?
+  data_type: Bool
+output_variables:
+- name: Runtime
+  description: The runtime of the tested program
+  data_type: 
+    unit: s
+- name: Bytes written
+  description: How many bytes were written to the standard output stream?
+  data_type:
+    unit: B
+- name: Match count
+  description: The number of points that matched the query
+  data_type: Number
+- name: Queried points count
+  description: The number of points that were inspected by the query
+  data_type: Number

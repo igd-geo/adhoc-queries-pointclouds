@@ -105,6 +105,7 @@ fn eval_compare_query<'a>(
             let cmp = get_compare_func::<f64>(expr);
             count_matches(data.into_iter(), cmp.as_ref(), gps_time.0)
         }
+        other => panic!("Unsupported value {other} in compare query"),
     }
 }
 

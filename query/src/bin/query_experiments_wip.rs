@@ -1,17 +1,16 @@
 use std::{
-    borrow::Cow,
     ffi::OsStr,
     path::{Path, PathBuf}, process::Command, fs::OpenOptions, io::Write,
 };
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use experiment_archiver::{Experiment, VariableTemplate};
+use exar::{experiment::ExperimentVersion, variable::GenericValue};
 use geo::MultiPolygon;
 use log::info;
 use pasture_core::{
     layout::{
-        attributes::{CLASSIFICATION, GPS_TIME, INTENSITY, POSITION_3D, RETURN_NUMBER},
+        attributes::{CLASSIFICATION, INTENSITY, POSITION_3D},
         PointLayout,
     },
     nalgebra::Vector3,
@@ -19,8 +18,8 @@ use pasture_core::{
 use pasture_io::{las::point_layout_from_las_point_format, las_rs::point::Format};
 use query::{
     index::{
-        AtomicExpression, Classification, CompareExpression, Geometry, GpsTime,
-        NoRefinementStrategy, Position, ProgressiveIndex, QueryExpression, ReturnNumber, Value,
+        AtomicExpression, Classification, CompareExpression, Geometry,
+        NoRefinementStrategy, Position, ProgressiveIndex, QueryExpression, ReturnNumber, Value, NumberOfReturns, DiscreteLod,
     },
     io::StdoutOutput,
     stats::QueryStats,
@@ -33,48 +32,10 @@ const DOC_SHAPEFILE_SMALL_RECT: &str =
     "doc_polygon_small.shp";
 const DOC_SHAPEFILE_SMALL_POLY: &str =
     "doc_polygon_small_2.shp";
-const DOC_SHAPEFILE_LARGE_RECT_1: &str =
+const DOC_SHAPEFILE_LARGE_RECT: &str =
     "doc_polygon_large_1.shp";
-const DOC_SHAPEFILE_LARGE_RECT_2: &str =
-    "doc_rect_large_1.shp";
-
-const VARIABLE_DATASET: VariableTemplate = VariableTemplate::new(
-    Cow::Borrowed("Dataset"),
-    Cow::Borrowed("The dataset used in the experiment"),
-    Cow::Borrowed("none"),
-);
-const VARIABLE_RUNTIME: VariableTemplate = VariableTemplate::new(
-    Cow::Borrowed("Runtime"),
-    Cow::Borrowed("The runtime of the query"),
-    Cow::Borrowed("ms"),
-);
-const VARIABLE_BYTES_WRITTEN: VariableTemplate = VariableTemplate::new(
-    Cow::Borrowed("Bytes written"),
-    Cow::Borrowed("The number of bytes written by the query engine to stdout"),
-    Cow::Borrowed("number"),
-);
-const VARIABLE_MACHINE: VariableTemplate = VariableTemplate::new(
-    Cow::Borrowed("Machine"),
-    Cow::Borrowed("The machine that the experiment is run on"),
-    Cow::Borrowed("text"),
-);
-const VARIABLE_QUERY: VariableTemplate = VariableTemplate::new(
-    Cow::Borrowed("Query"),
-    Cow::Borrowed("The query that was executed on the data"),
-    Cow::Borrowed("text"),
-);
-const VARIABLE_OUTPUT_ATTRIBUTES: VariableTemplate = VariableTemplate::new(
-    Cow::Borrowed("Output attributes"),
-    Cow::Borrowed(
-        "The point attributes that were extracted from the dataset and written to stdout",
-    ),
-    Cow::Borrowed("text"),
-);
-const VARIABLE_PURGE_CACHE: VariableTemplate = VariableTemplate::new(
-    Cow::Borrowed("Purge cache before run?"),
-    Cow::Borrowed("Is the disk cache being purged before each run of the experiment?"),
-    Cow::Borrowed("bool"),
-);
+    const DOC_SHAPEFILE_LARGE_POLY: &str =
+    "doc_polygon_large_1.shp";
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -175,17 +136,21 @@ fn run_query(params: QueryParams, run_number: usize, total_runs: usize,) -> Resu
 }
 
 /// Returns a collection of queries for the experiment with the district of columbia dataset
-fn experiment_queries_doc(args: &Args) -> Result<Vec<QueryExpression>> {
+fn experiment_queries_doc(args: &Args) -> Result<Vec<(&'static str, QueryExpression)>> {
     let small_rect_query = crude_shapefile_parsing(args.shapefiles_path.join(DOC_SHAPEFILE_SMALL_RECT))?;
     let small_poly_query = crude_shapefile_parsing(args.shapefiles_path.join(DOC_SHAPEFILE_SMALL_POLY))?;
     let small_poly_with_holes_query =
         crude_shapefile_parsing(args.shapefiles_path.join(DOC_SHAPEFILE_SMALL_POLY_WITH_HOLES_PATH))?;
-    let large_rect_query_1 = crude_shapefile_parsing(args.shapefiles_path.join(DOC_SHAPEFILE_LARGE_RECT_1))?;
-    let large_rect_query_2 = crude_shapefile_parsing(args.shapefiles_path.join(DOC_SHAPEFILE_LARGE_RECT_2))?;
+    let large_rect_query_1 = crude_shapefile_parsing(args.shapefiles_path.join(DOC_SHAPEFILE_LARGE_RECT))?;
+    let large_poly_query = crude_shapefile_parsing(args.shapefiles_path.join(DOC_SHAPEFILE_LARGE_POLY))?;
 
     let aabb_large = QueryExpression::Atomic(AtomicExpression::Within(
         Value::Position(Position(Vector3::new(390000.0, 130000.0, 0.0)))
             ..Value::Position(Position(Vector3::new(400000.0, 140000.0, 200.0))),
+    ));
+    let aabb_small = QueryExpression::Atomic(AtomicExpression::Within(
+        Value::Position(Position(Vector3::new(390000.0, 130000.0, 0.0)))
+            ..Value::Position(Position(Vector3::new(390500.0, 140000.0, 200.0))),
     ));
     let aabb_no_matches = QueryExpression::Atomic(AtomicExpression::Within(
         Value::Position(Position(Vector3::new(39000.0, 130000.0, 0.0)))
@@ -205,56 +170,54 @@ fn experiment_queries_doc(args: &Args) -> Result<Vec<QueryExpression>> {
         Value::Classification(Classification(6)),
     )));
 
-    let everything_not_unclassified = QueryExpression::Atomic(AtomicExpression::Compare((
-        CompareExpression::GreaterThan,
-        Value::Classification(Classification(0)),
-    )));
+    let buildings_in_small_polygon = QueryExpression::And(Box::new(small_poly_query.clone()), Box::new(class_buildings.clone()));
+
+    let vegetation_classes = QueryExpression::Atomic(AtomicExpression::Within(
+        Value::Classification(Classification(3))..Value::Classification(Classification(6))
+    ));
 
     let first_returns = QueryExpression::Atomic(AtomicExpression::Compare((
         CompareExpression::Equals,
         Value::ReturnNumber(ReturnNumber(1)),
     )));
 
-    let first_returns_with_less_than = QueryExpression::Atomic(AtomicExpression::Compare((
-        CompareExpression::LessThan,
-        Value::ReturnNumber(ReturnNumber(2)),
-    )));
-
-    let gps_time_range = QueryExpression::Atomic(AtomicExpression::Within(
-        Value::GpsTime(GpsTime(207011500.0))..Value::GpsTime(GpsTime(207012000.0)),
-    ));
-
-    let buildings_and_first_returns = QueryExpression::And(
-        Box::new(class_buildings.clone()),
+    let canopies_estimate = QueryExpression::And(
+        Box::new(QueryExpression::Atomic(AtomicExpression::Compare(
+            (CompareExpression::GreaterThan,
+            Value::NumberOfReturns(NumberOfReturns(1))),
+        ))),
         Box::new(first_returns.clone()),
     );
-    let time_range_or_bounds = QueryExpression::Or(
-        Box::new(gps_time_range.clone()),
-        Box::new(aabb_large.clone()),
+
+    let lod0 = QueryExpression::Atomic(
+        AtomicExpression::Compare(
+            (CompareExpression::Equals, Value::LOD(DiscreteLod(0))),
+        )
     );
 
-    let all_buildings_within_large_rect1 = QueryExpression::And(
-        Box::new(large_rect_query_1.clone()),
-        Box::new(class_buildings.clone()),
+    let lod3 = QueryExpression::Atomic(
+        AtomicExpression::Compare(
+            (CompareExpression::Equals, Value::LOD(DiscreteLod(3))),
+        )
     );
 
     Ok(vec![
-        small_rect_query,
-        small_poly_query,
-        small_poly_with_holes_query,
-        large_rect_query_1,
-        large_rect_query_2,
-        aabb_all,
-        aabb_large,
-        aabb_no_matches,
-        class_buildings,
-        everything_not_unclassified,
-        first_returns,
-        first_returns_with_less_than,
-        gps_time_range,
-        buildings_and_first_returns,
-        time_range_or_bounds,
-        all_buildings_within_large_rect1,
+        ("AABB (small)", aabb_small),
+        ("AABB (large)", aabb_large),
+        ("AABB (full)", aabb_all),
+        ("AABB (none)", aabb_no_matches),
+        ("Rect (small)", small_rect_query),
+        ("Polygon (small)", small_poly_query),
+        ("Rect (large)", large_rect_query_1),
+        ("Polygon (large)", large_poly_query),
+        ("Polygon (holes)", small_poly_with_holes_query),
+        ("Buildings", class_buildings),
+        ("Buildings in small polygon", buildings_in_small_polygon),
+        ("Vegetation", vegetation_classes),
+        ("First returns", first_returns),
+        ("Canopies estimate", canopies_estimate),
+        ("LOD0", lod0),
+        ("LOD3", lod3),
     ])
 }
 
@@ -299,47 +262,26 @@ fn main() -> Result<()> {
     ];
 
     let output_point_layouts = [
-        point_layout_from_las_point_format(&Format::new(1)?, false)?,
-        point_layout_from_las_point_format(&Format::new(1)?, true)?,
-        [POSITION_3D].into_iter().collect::<PointLayout>(),
-        [POSITION_3D, CLASSIFICATION]
+        ("All (default)", point_layout_from_las_point_format(&Format::new(1)?, false)?),
+        ("All (native)", point_layout_from_las_point_format(&Format::new(1)?, true)?),
+        ("Positions", [POSITION_3D].into_iter().collect::<PointLayout>()),
+        ("Positions, classifications, intensities", [POSITION_3D, CLASSIFICATION, INTENSITY]
             .into_iter()
-            .collect::<PointLayout>(),
-        [POSITION_3D, GPS_TIME].into_iter().collect::<PointLayout>(),
-        [POSITION_3D, CLASSIFICATION, INTENSITY, RETURN_NUMBER]
-            .into_iter()
-            .collect::<PointLayout>(),
+            .collect::<PointLayout>()),
     ];
 
-    let required_variables = [
-        VARIABLE_DATASET,
-        VARIABLE_MACHINE,
-        VARIABLE_RUNTIME,
-        VARIABLE_BYTES_WRITTEN,
-        VARIABLE_QUERY,
-        VARIABLE_OUTPUT_ATTRIBUTES,
-        VARIABLE_PURGE_CACHE,
-    ]
-    .into_iter()
-    .collect();
-    let experiment = Experiment::new(
-        "Ad-hoc queries 2023 (WIP)".into(),
-        "Ad-hoc queries experiment with the improved query engine. This is WIP and marked as such"
-            .into(),
-        "Pascal Bormann".into(),
-        required_variables,
-    )
-    .context("Failed to setup experiment")?;
+    let experiment_description = include_str!("yaml/ad_hoc_queries.yaml");
+    let experiment = ExperimentVersion::from_yaml_str(experiment_description).context("Could not get current version of experiment")?;
 
     let total_runs = doc_queries.len() * output_point_layouts.len() * doc_datasets.len();
-    let mut current_run = 0;
+    let mut current_run = 0; 
 
     // Dataset is in outermost loop so that - if we don't flush the disk cache - we immediately get results for
     // cached data. Which we might want
     for (file_format, files) in &doc_datasets {
         for flush_disk_cache in [false, true] {
-            for query in &doc_queries {
-                for output_layout in &output_point_layouts {
+            for (query_label, query) in &doc_queries {
+                for (layout_label, output_layout) in &output_point_layouts {
                     let params = QueryParams {
                         files: files.clone(),
                         flush_disk_cache,
@@ -347,18 +289,23 @@ fn main() -> Result<()> {
                         target_layout: output_layout.clone(),
                         file_format,
                     };
+                    let experiment_instance = experiment.make_instance([
+                        ("Dataset", GenericValue::String(format!("DoC ({file_format})"))),
+                        ("Machine", GenericValue::String(machine.clone())),
+                        ("System", GenericValue::String("Ad-hoc query engine".to_string())),
+                        ("Query", GenericValue::String(query_label.to_string())),
+                        ("Output attributes", GenericValue::String(layout_label.to_string())),
+                        ("Purge cache", GenericValue::Bool(flush_disk_cache)),
+                    ]).context("Could not create experiment instance")?;
 
                     current_run += 1;
-                    experiment.run(|run_context| {
+                    experiment_instance.run(|run_context| {
                         let (query_stats, output_stats) = run_query(params, current_run, total_runs).context("Executing query failed")?;
                         
-                        run_context.add_value_by_name(VARIABLE_DATASET.name(), format!("DoC {file_format}"));
-                        run_context.add_value_by_name(VARIABLE_MACHINE.name(), machine.as_str());
-                        run_context.add_value_by_name(VARIABLE_RUNTIME.name(), query_stats.runtime.as_millis());
-                        run_context.add_value_by_name(VARIABLE_BYTES_WRITTEN.name(), output_stats.bytes_written);
-                        run_context.add_value_by_name(VARIABLE_QUERY.name(), query.to_string());
-                        run_context.add_value_by_name(VARIABLE_OUTPUT_ATTRIBUTES.name(), output_layout.to_string());
-                        run_context.add_value_by_name(VARIABLE_PURGE_CACHE.name(), flush_disk_cache.to_string());
+                        run_context.add_measurement("Runtime", GenericValue::Numeric(query_stats.runtime.as_secs_f64()));
+                        run_context.add_measurement("Bytes written", GenericValue::Numeric(output_stats.bytes_written as f64));
+                        run_context.add_measurement("Match count", GenericValue::Numeric(query_stats.matching_points as f64));
+                        run_context.add_measurement("Queried points count", GenericValue::Numeric(query_stats.total_points_queried as f64));
 
                         Ok(())
                     }).with_context(|| format!("Experiment run failed (query {query}, file format {file_format}, output layout {output_layout})"))?;

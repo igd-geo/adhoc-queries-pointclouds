@@ -1,0 +1,36 @@
+name: Optimized pointcloud read performance
+description: "Measures the performance of reading point clouds in optimized memory layouts using pasture"
+researchers:
+- Pascal Bormann
+input_variables:
+- name: Dataset
+  description: The dataset used in this experiment
+  data_type: Label
+- name: Machine
+  description: The machine that the experiment is run on
+  data_type: Label
+- name: Purge cache
+  description: Purge the disk cache before running the experiment?
+  data_type: Bool
+- name: mmap
+  description: Use memory-mapped I/O?
+  data_type: Bool
+- name: Point layout
+  description: The point memory layout in which data is read
+  data_type: Label
+output_variables:
+- name: Runtime
+  description: The runtime of the tested program
+  data_type: 
+    unit: s
+- name: Point throughput
+  description: The number of points that were read per second
+  daty_type:
+    unit: 1/s
+- name: Memory throughput
+  description: The number of bytes that were read per second
+  data_type:
+    unit: B/s
+- name: Point count
+  description: The number of points read from the dataset
+  data_type: Number

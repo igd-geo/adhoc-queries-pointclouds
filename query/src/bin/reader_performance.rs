@@ -1,6 +1,4 @@
 use std::{
-    borrow::Cow,
-    collections::HashSet,
     ffi::OsStr,
     fs::{File, OpenOptions},
     io::{BufReader, Cursor, Write},
@@ -11,72 +9,17 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use clap::Parser;
-use experiment_archiver::{Experiment, VariableTemplate};
+use exar::{
+    experiment::{ExperimentInstance, ExperimentVersion},
+    variable::GenericValue,
+};
 use io::{last::LASTReader, lazer::LazerReader};
-use itertools::Itertools;
 use pasture_core::containers::{BorrowedBuffer, HashMapBuffer, MakeBufferFromLayout, OwningBuffer};
 use pasture_io::{
     base::{read_all, PointReader},
     las::{point_layout_from_las_metadata, LASReader},
     las_rs::{Point, Read},
 };
-use statrs::statistics::{Data, Distribution};
-
-const VARIABLE_DATASET: VariableTemplate = VariableTemplate::new(
-    Cow::Borrowed("Dataset"),
-    Cow::Borrowed("The dataset used in the experiment"),
-    Cow::Borrowed("none"),
-);
-const VARIABLE_TOOL: VariableTemplate = VariableTemplate::new(
-    Cow::Borrowed("Tool / crate"),
-    Cow::Borrowed("For which tool/crate is this measurement?"),
-    Cow::Borrowed("text"),
-);
-const VARIABLE_RUNTIME: VariableTemplate = VariableTemplate::new(
-    Cow::Borrowed("Runtime"),
-    Cow::Borrowed("The runtime of the tool/crate"),
-    Cow::Borrowed("ms"),
-);
-const VARIABLE_RUNTIME_ERR: VariableTemplate = VariableTemplate::new(
-    Cow::Borrowed("Runtime error (1 sigma)"),
-    Cow::Borrowed("The standard deviation of the measured runtime"),
-    Cow::Borrowed("ms"),
-);
-const VARIABLE_NR_POINTS: VariableTemplate = VariableTemplate::new(
-    Cow::Borrowed("Number of points"),
-    Cow::Borrowed("The number of points read from the dataset"),
-    Cow::Borrowed("number"),
-);
-const VARIABLE_POINT_THROUGHPUT: VariableTemplate = VariableTemplate::new(
-    Cow::Borrowed("Throughput (points)"),
-    Cow::Borrowed("The number of points read per second"),
-    Cow::Borrowed("points/s"),
-);
-const VARIABLE_POINT_THROUGHPUT_ERR: VariableTemplate = VariableTemplate::new(
-    Cow::Borrowed("Throughput (points) error (1 sigma)"),
-    Cow::Borrowed("Standard error for point throughput"),
-    Cow::Borrowed("points/s"),
-);
-const VARIABLE_MEMORY_THROUGHPUT: VariableTemplate = VariableTemplate::new(
-    Cow::Borrowed("Throughput (memory)"),
-    Cow::Borrowed("The memory throughput, i.e. how many bytes were read per second"),
-    Cow::Borrowed("bytes/s"),
-);
-const VARIABLE_MEMORY_THROUGHPUT_ERR: VariableTemplate = VariableTemplate::new(
-    Cow::Borrowed("Throughput (memory) error (1 sigma)"),
-    Cow::Borrowed("Standard error for memory throughput"),
-    Cow::Borrowed("bytes/s"),
-);
-const VARIABLE_PURGE_CACHE: VariableTemplate = VariableTemplate::new(
-    Cow::Borrowed("Purge cache before run?"),
-    Cow::Borrowed("Is the disk cache being purged before each run of the experiment?"),
-    Cow::Borrowed("bool"),
-);
-const VARIABLE_MACHINE: VariableTemplate = VariableTemplate::new(
-    Cow::Borrowed("Machine"),
-    Cow::Borrowed("The machine that the experiment is run on"),
-    Cow::Borrowed("text"),
-);
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
@@ -92,8 +35,6 @@ struct Stats {
     number_of_points: usize,
     points_per_second: f64,
     bytes_per_second: f64,
-    tool: &'static str,
-    dataset: String,
 }
 
 fn flush_disk_cache() -> Result<()> {
@@ -151,19 +92,11 @@ fn benchmark_las_pasture(file: &Path, mmapped: bool) -> Result<Stats> {
     let bytes_per_second = file_size as f64 / runtime.as_secs_f64();
     let points_per_second = points.len() as f64 / runtime.as_secs_f64();
 
-    let tool = if mmapped {
-        "pasture (mmap)"
-    } else {
-        "pasture (file)"
-    };
-
     Ok(Stats {
         bytes_per_second,
         number_of_points: points.len(),
         points_per_second,
         runtime,
-        tool: tool,
-        dataset: file.display().to_string(),
     })
 }
 
@@ -197,19 +130,11 @@ fn benchmark_las_lasrs(file: &Path, mmapped: bool) -> Result<Stats> {
     let bytes_per_second = file_size as f64 / runtime.as_secs_f64();
     let points_per_second = points.len() as f64 / runtime.as_secs_f64();
 
-    let tool = if mmapped {
-        "las-rs (mmap)"
-    } else {
-        "las-rs (file)"
-    };
-
     Ok(Stats {
         bytes_per_second,
         number_of_points: points.len(),
         points_per_second,
         runtime,
-        tool,
-        dataset: file.display().to_string(),
     })
 }
 
@@ -264,8 +189,6 @@ fn benchmark_las_pdal(file: &Path) -> Result<Stats> {
         number_of_points,
         points_per_second,
         runtime,
-        tool: "PDAL",
-        dataset: file.display().to_string(),
     })
 }
 
@@ -317,19 +240,11 @@ fn benchmark_last_pasture(file: &Path, mmapped: bool) -> Result<Stats> {
     let bytes_per_second = file_size as f64 / runtime.as_secs_f64();
     let points_per_second = points.len() as f64 / runtime.as_secs_f64();
 
-    let tool = if mmapped {
-        "pasture (mmap)"
-    } else {
-        "pasture (file)"
-    };
-
     Ok(Stats {
         bytes_per_second,
         number_of_points: points.len(),
         points_per_second,
         runtime,
-        tool: tool,
-        dataset: file.display().to_string(),
     })
 }
 
@@ -375,111 +290,51 @@ fn benchmark_lazer_pasture(file: &Path, mmapped: bool) -> Result<Stats> {
     let bytes_per_second = file_size as f64 / runtime.as_secs_f64();
     let points_per_second = points.len() as f64 / runtime.as_secs_f64();
 
-    let tool = if mmapped {
-        "pasture (mmap)"
-    } else {
-        "pasture (file)"
-    };
-
     Ok(Stats {
         bytes_per_second,
         number_of_points: points.len(),
         points_per_second,
         runtime,
-        tool: tool,
-        dataset: file.display().to_string(),
     })
 }
 
 fn run_experiment(
     file: &Path,
     runner: impl Fn(&Path) -> Result<Stats>,
-    experiment: &mut Experiment,
-    machine: &str,
+    experiment: ExperimentInstance<'_>,
     purge_cache: bool,
 ) -> Result<()> {
     const RUNS: usize = 10;
 
-    let stats_per_run = (0..RUNS)
-        .map(|_| -> Result<Stats> {
-            if purge_cache {
-                flush_disk_cache().context("Failed to reset page cache")?;
-            }
-            runner(file).context("Failed to run experiment")
-        })
-        .collect::<Result<Vec<_>>>()?;
+    for _ in 0..RUNS {
+        experiment
+            .run(|context| -> Result<()> {
+                if purge_cache {
+                    flush_disk_cache().context("Failed to reset page cache")?;
+                }
+                let run_stats = runner(file).context("Failed to run experiment")?;
 
-    let runtimes_secs = Data::new(
-        stats_per_run
-            .iter()
-            .map(|stat| stat.runtime.as_secs_f64())
-            .collect::<Vec<_>>(),
-    );
-    let mean_runtime_ms = runtimes_secs
-        .mean()
-        .expect("Could not calculate mean runtime")
-        * 1000.0;
-    let stddev_runtime_ms = runtimes_secs
-        .std_dev()
-        .expect("Could not calculate runtime standard deviation")
-        * 1000.0;
+                context.add_measurement(
+                    "Runtime",
+                    GenericValue::Numeric(run_stats.runtime.as_secs_f64()),
+                );
+                context.add_measurement(
+                    "Point throughput",
+                    GenericValue::Numeric(run_stats.points_per_second),
+                );
+                context.add_measurement(
+                    "Memory throughput",
+                    GenericValue::Numeric(run_stats.bytes_per_second),
+                );
+                context.add_measurement(
+                    "Point count",
+                    GenericValue::Numeric(run_stats.number_of_points as f64),
+                );
+                Ok(())
+            })
+            .context("Experiment run failed")?;
+    }
 
-    let point_throughputs = Data::new(
-        stats_per_run
-            .iter()
-            .map(|stat| stat.points_per_second)
-            .collect_vec(),
-    );
-    let mean_point_throughput = point_throughputs
-        .mean()
-        .expect("Could not calculate mean point throughput")
-        as usize;
-    let stddev_point_throughput = point_throughputs.std_dev().unwrap() as usize;
-
-    let memory_throghputs = Data::new(
-        stats_per_run
-            .iter()
-            .map(|stat| stat.bytes_per_second)
-            .collect_vec(),
-    );
-    let mean_memory_throughput = memory_throghputs
-        .mean()
-        .expect("Could not calculate mean memory throughput")
-        as usize;
-    let stddev_memory_throughput = memory_throghputs.std_dev().unwrap() as usize;
-
-    let stats = stats_per_run[0].clone();
-
-    experiment.run(|context| {
-        context.add_value_by_name(VARIABLE_DATASET.name(), stats.dataset);
-        context.add_value_by_name(VARIABLE_MACHINE.name(), machine);
-        context.add_value_by_name(
-            VARIABLE_MEMORY_THROUGHPUT.name(),
-            format!("{mean_memory_throughput}"),
-        );
-        context.add_value_by_name(
-            VARIABLE_MEMORY_THROUGHPUT_ERR.name(),
-            format!("{stddev_memory_throughput}"),
-        );
-        context.add_value_by_name(VARIABLE_NR_POINTS.name(), stats.number_of_points);
-        context.add_value_by_name(
-            VARIABLE_POINT_THROUGHPUT.name(),
-            format!("{mean_point_throughput}"),
-        );
-        context.add_value_by_name(
-            VARIABLE_POINT_THROUGHPUT_ERR.name(),
-            format!("{stddev_point_throughput}"),
-        );
-        context.add_value_by_name(VARIABLE_RUNTIME.name(), format!("{mean_runtime_ms:.3}"));
-        context.add_value_by_name(
-            VARIABLE_RUNTIME_ERR.name(),
-            format!("{stddev_runtime_ms:3}"),
-        );
-        context.add_value_by_name(VARIABLE_PURGE_CACHE.name(), purge_cache);
-        context.add_value_by_name(VARIABLE_TOOL.name(), stats.tool);
-
-        Ok(())
-    })?;
     Ok(())
 }
 
@@ -497,70 +352,71 @@ fn main() -> Result<()> {
 
     let machine = std::env::var("MACHINE").context("To run experiments, please set the 'MACHINE' environment variable to the name of the machine that you are running this experiment on. This is required so that experiment data can be mapped to the actual machine that ran the experiment. This will typically be the name or system configuration of the computer that runs the experiment.")?;
 
-    let variables = [
-        VARIABLE_DATASET.clone(),
-        VARIABLE_TOOL.clone(),
-        VARIABLE_RUNTIME.clone(),
-        VARIABLE_RUNTIME_ERR.clone(),
-        VARIABLE_NR_POINTS.clone(),
-        VARIABLE_POINT_THROUGHPUT.clone(),
-        VARIABLE_POINT_THROUGHPUT_ERR.clone(),
-        VARIABLE_MEMORY_THROUGHPUT.clone(),
-        VARIABLE_MEMORY_THROUGHPUT_ERR.clone(),
-        VARIABLE_PURGE_CACHE.clone(),
-        VARIABLE_MACHINE.clone(),
-    ]
-    .into_iter()
-    .collect::<HashSet<VariableTemplate>>();
+    let experiment_description = include_str!("yaml/reader_performance.yaml");
+    let experiment = ExperimentVersion::from_yaml_str(experiment_description)
+        .context("Could not get experiment version")?;
 
-    let mut experiment = Experiment::new(
-        "Pointcloud read performance".into(),
-        "Measures the performance of reading point clouds using various libraries and tools".into(),
-        "Pascal Bormann".into(),
-        variables,
-    )
-    .context("Failed to setup experiment")?;
-    experiment.set_autolog_runs(true);
+    let dataset = args.input_file.display().to_string();
 
     match extension.as_ref() {
         "las" | "laz" => {
             run_experiment(
                 &args.input_file,
                 |path| benchmark_las_pasture(path, false),
-                &mut experiment,
-                &machine,
+                experiment.make_instance([
+                    ("Dataset", GenericValue::String(dataset.clone())),
+                    ("Machine", GenericValue::String(machine.clone())),
+                    ("Tool", GenericValue::String("pasture (read)".to_string())),
+                    ("Purge cache", GenericValue::Bool(args.purge_cache)),
+                ])?,
                 args.purge_cache,
             )
             .context("Benchmarking pasture failed")?;
             run_experiment(
                 &args.input_file,
                 |path| benchmark_las_pasture(path, true),
-                &mut experiment,
-                &machine,
+                experiment.make_instance([
+                    ("Dataset", GenericValue::String(dataset.clone())),
+                    ("Machine", GenericValue::String(machine.clone())),
+                    ("Tool", GenericValue::String("pasture (mmap)".to_string())),
+                    ("Purge cache", GenericValue::Bool(args.purge_cache)),
+                ])?,
                 args.purge_cache,
             )
             .context("Benchmarking pasture failed")?;
             run_experiment(
                 &args.input_file,
                 |path| benchmark_las_lasrs(path, false),
-                &mut experiment,
-                &machine,
+                experiment.make_instance([
+                    ("Dataset", GenericValue::String(dataset.clone())),
+                    ("Machine", GenericValue::String(machine.clone())),
+                    ("Tool", GenericValue::String("las-rs (read)".to_string())),
+                    ("Purge cache", GenericValue::Bool(args.purge_cache)),
+                ])?,
                 args.purge_cache,
             )
             .context("Benchmarking las-rs failed")?;
             run_experiment(
                 &args.input_file,
                 |path| benchmark_las_lasrs(path, true),
-                &mut experiment,
-                &machine,
+                experiment.make_instance([
+                    ("Dataset", GenericValue::String(dataset.clone())),
+                    ("Machine", GenericValue::String(machine.clone())),
+                    ("Tool", GenericValue::String("las-rs (mmap)".to_string())),
+                    ("Purge cache", GenericValue::Bool(args.purge_cache)),
+                ])?,
                 args.purge_cache,
             )
             .context("Benchmarking las-rs failed")?;
             run_experiment(
                 &args.input_file,
                 benchmark_las_pdal,
-                &mut experiment,
-                &machine,
+                experiment.make_instance([
+                    ("Dataset", GenericValue::String(dataset.clone())),
+                    ("Machine", GenericValue::String(machine.clone())),
+                    ("Tool", GenericValue::String("PDAL".to_string())),
+                    ("Purge cache", GenericValue::Bool(args.purge_cache)),
+                ])?,
                 args.purge_cache,
             )
             .context("Benchmarking PDAL failed")?;
@@ -569,16 +425,24 @@ fn main() -> Result<()> {
             run_experiment(
                 &args.input_file,
                 |path| benchmark_last_pasture(path, false),
-                &mut experiment,
-                &machine,
+                experiment.make_instance([
+                    ("Dataset", GenericValue::String(dataset.clone())),
+                    ("Machine", GenericValue::String(machine.clone())),
+                    ("Tool", GenericValue::String("pasture (read)".to_string())),
+                    ("Purge cache", GenericValue::Bool(args.purge_cache)),
+                ])?,
                 args.purge_cache,
             )
             .context("Benchmarking pasture failed")?;
             run_experiment(
                 &args.input_file,
                 |path| benchmark_last_pasture(path, true),
-                &mut experiment,
-                &machine,
+                experiment.make_instance([
+                    ("Dataset", GenericValue::String(dataset.clone())),
+                    ("Machine", GenericValue::String(machine.clone())),
+                    ("Tool", GenericValue::String("pasture (mmap)".to_string())),
+                    ("Purge cache", GenericValue::Bool(args.purge_cache)),
+                ])?,
                 args.purge_cache,
             )
             .context("Benchmarking pasture failed")?;
@@ -587,16 +451,24 @@ fn main() -> Result<()> {
             run_experiment(
                 &args.input_file,
                 |path| benchmark_lazer_pasture(path, false),
-                &mut experiment,
-                &machine,
+                experiment.make_instance([
+                    ("Dataset", GenericValue::String(dataset.clone())),
+                    ("Machine", GenericValue::String(machine.clone())),
+                    ("Tool", GenericValue::String("pasture (read)".to_string())),
+                    ("Purge cache", GenericValue::Bool(args.purge_cache)),
+                ])?,
                 args.purge_cache,
             )
             .context("Benchmarking pasture failed")?;
             run_experiment(
                 &args.input_file,
                 |path| benchmark_lazer_pasture(path, true),
-                &mut experiment,
-                &machine,
+                experiment.make_instance([
+                    ("Dataset", GenericValue::String(dataset.clone())),
+                    ("Machine", GenericValue::String(machine.clone())),
+                    ("Tool", GenericValue::String("pasture (mmap)".to_string())),
+                    ("Purge cache", GenericValue::Bool(args.purge_cache)),
+                ])?,
                 args.purge_cache,
             )
             .context("Benchmarking pasture failed")?;

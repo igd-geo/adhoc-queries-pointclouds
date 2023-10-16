@@ -1,7 +1,8 @@
 use crate::{
+    grid_sampling::SparseGrid,
     index::{
-        Classification, CompareExpression, DatasetID, Geometry, GpsTime, NumberOfReturns,
-        PointRange, Position, ReturnNumber,
+        Classification, CompareExpression, DatasetID, DiscreteLod, Geometry, GpsTime,
+        NumberOfReturns, PointRange, Position, ReturnNumber,
     },
     io::{FileHandle, InputLayer, PointData},
     stats::BlockQueryRuntimeTracker,
@@ -13,7 +14,7 @@ use geo::{coord, Contains, LineString, Polygon};
 use pasture_core::{
     containers::BorrowedBuffer,
     layout::{
-        attributes::{CLASSIFICATION, GPS_TIME, NUMBER_OF_RETURNS, RETURN_NUMBER},
+        attributes::{CLASSIFICATION, GPS_TIME, NUMBER_OF_RETURNS, POSITION_3D, RETURN_NUMBER},
         PointAttributeDefinition, PointLayout, PrimitiveType,
     },
     math::AABB,
@@ -1104,6 +1105,114 @@ impl CompiledQueryAtom for LasQueryAtomCompare<GpsTime> {
                     runtime_tracker,
                 )
             }
+        }
+    }
+}
+
+impl CompiledQueryAtom for LasQueryAtomCompare<DiscreteLod> {
+    fn eval(
+        &self,
+        input_layer: &InputLayer,
+        block: PointRange,
+        dataset_id: DatasetID,
+        matching_indices: &'_ mut [bool],
+        which_indices_to_loop_over: super::WhichIndicesToLoopOver,
+        _runtime_tracker: &BlockQueryRuntimeTracker,
+    ) -> Result<usize> {
+        let _span = tracy_client::span!("LasQueryAtomCompare<GpsTime>::eval");
+
+        let custom_layout = PointLayout::from_attributes(&[POSITION_3D]);
+        let point_data = input_layer.get_point_data_in_layout(
+            dataset_id,
+            block.clone(),
+            &custom_layout,
+            true, // We need positions in world space for grid-center sampling
+        )?;
+
+        const ROOT_GRID_SIZE: usize = 64;
+        let grid_size = ROOT_GRID_SIZE * 2_usize.pow(self.value.0 as u32);
+        let dataset_bounds = input_layer
+            .get_bounds(dataset_id)
+            .ok_or(anyhow!("Could not get dataset bounds"))?;
+        let rectangular_bounds = dataset_bounds.as_cubic();
+        let cell_size = rectangular_bounds.extent().x / grid_size as f64;
+        let mut grid_sampler = SparseGrid::new(rectangular_bounds, cell_size)
+            .context("Could not create SparseGrid for grid-center sampling")?;
+
+        match self.compare_expression {
+            CompareExpression::Equals => {
+                match point_data {
+                    PointData::OwnedColumnar(columnar) => {
+                        let view = columnar.view_attribute::<Vector3<f64>>(&POSITION_3D);
+                        let positions = view.iter().copied();
+                        for (id, position) in positions.enumerate() {
+                            grid_sampler.insert_point(&position, id);
+                        }
+                    }
+                    _ => {
+                        let positions = point_data
+                            .view_attribute::<Vector3<f64>>(&POSITION_3D)
+                            .into_iter();
+                        for (id, position) in positions.enumerate() {
+                            grid_sampler.insert_point(&position, id);
+                        }
+                    }
+                }
+
+                // TODO How tf do I implement this? I first have to insert all points (but which ones? matching? all?)
+                // into the sampling grid, then I have to figure out which points actually match and overwrite all (matching?)
+                // indices. The problem is that we have to check EVERY index and overwrite `matching_indices` correctly, so
+                // we would need a O(1) lookup from point index to match/no match, but the current sampling grid implementation
+                // does not have that...
+
+                let mut num_matches = 0;
+                match which_indices_to_loop_over {
+                    super::WhichIndicesToLoopOver::All => {
+                        assert!(block.points_in_file.len() <= matching_indices.len());
+                        for (id, index_matches) in matching_indices
+                            .iter_mut()
+                            .enumerate()
+                            .take(block.points_in_file.len())
+                        {
+                            *index_matches = grid_sampler.matches(id);
+                            if *index_matches {
+                                num_matches += 1;
+                            }
+                        }
+                    }
+                    super::WhichIndicesToLoopOver::Matching => {
+                        for (id, index_matches) in matching_indices
+                            .iter_mut()
+                            .enumerate()
+                            .take(block.points_in_file.len())
+                            .filter(|(_, is_match)| **is_match)
+                        {
+                            *index_matches = grid_sampler.matches(id);
+                            if *index_matches {
+                                num_matches += 1;
+                            }
+                        }
+                    }
+                    super::WhichIndicesToLoopOver::NotMatching => {
+                        for (id, index_matches) in matching_indices
+                            .iter_mut()
+                            .enumerate()
+                            .take(block.points_in_file.len())
+                            .filter(|(_, is_match)| !**is_match)
+                        {
+                            *index_matches = grid_sampler.matches(id);
+                            if *index_matches {
+                                num_matches += 1;
+                            }
+                        }
+                    }
+                }
+
+                // runtime_tracker.log_runtime(block, BlockQueryRuntimeType::Eval, timer.elapsed());
+
+                Ok(num_matches)
+            }
+            _ => bail!("Only Equals comparison currently supported for DiscreteLod"),
         }
     }
 }

@@ -2,6 +2,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use pasture_core::{
     containers::{BorrowedBuffer, HashMapBuffer, InterleavedBuffer, VectorBuffer},
     layout::PointLayout,
+    math::AABB,
+    meta::Metadata,
 };
 use pasture_io::las::{point_layout_from_las_metadata, LASMetadata, LASReader};
 use std::{
@@ -146,6 +148,7 @@ pub struct InputLayer {
     known_files: HashMap<FileHandle, PathBuf>,
     active_point_loaders: Mutex<HashMap<FileHandle, Arc<dyn PointDataLoader>>>,
     las_files_metadata: HashMap<FileHandle, LASMetadata>,
+    dataset_bounds: HashMap<DatasetID, AABB<f64>>,
     max_ram_consumption: usize,
 }
 
@@ -163,6 +166,7 @@ impl InputLayer {
             .enumerate()
             .map(|(file_number, _)| FileHandle(dataset_id, file_number))
             .collect();
+        let mut bounds: Option<AABB<f64>> = None;
         for (file_number, path) in files.iter().enumerate() {
             if !path.as_ref().exists() {
                 bail!("File {} does not exist", path.as_ref().display());
@@ -180,7 +184,22 @@ impl InputLayer {
                 FileHandle(dataset_id, file_number),
                 las_reader.las_metadata().clone(),
             );
+            let file_bounds = las_reader
+                .las_metadata()
+                .bounds()
+                .ok_or(anyhow!("Could not get bounds"))?;
+            if let Some(current_bounds) = bounds {
+                bounds = Some(AABB::union(&current_bounds, &file_bounds));
+            } else {
+                bounds = Some(file_bounds);
+            }
         }
+        self.dataset_bounds.insert(
+            dataset_id,
+            bounds.ok_or(anyhow!(
+                "Could not get bounds of dataset as dataset does not contain any files"
+            ))?,
+        );
         Ok(file_handles)
     }
 
@@ -235,6 +254,11 @@ impl InputLayer {
     /// Returns the metadata of the LAS file for the given `file_handle`
     pub fn get_las_metadata(&self, file_handle: FileHandle) -> Option<&LASMetadata> {
         self.las_files_metadata.get(&file_handle)
+    }
+
+    /// Returns the bounds of the given dataset
+    pub fn get_bounds(&self, dataset_id: DatasetID) -> Option<&AABB<f64>> {
+        self.dataset_bounds.get(&dataset_id)
     }
 
     /// Returns the default `PointLayout` for the given file. This is the `PointLayout` that exactly represents
@@ -330,6 +354,7 @@ impl Default for InputLayer {
             known_files: Default::default(),
             active_point_loaders: Default::default(),
             las_files_metadata: Default::default(),
+            dataset_bounds: Default::default(),
             max_ram_consumption: Self::DEFAULT_MAX_MEMORY_CONSUMPTION,
         }
     }

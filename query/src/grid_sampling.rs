@@ -3,15 +3,15 @@ use pasture_core::{
     math::AABB,
     nalgebra::{distance_squared, Point3, Vector3},
 };
-use readers::Point;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 pub struct SparseGrid {
     bounds: AABB<f64>,
     cell_size: f64,
     dimensions: Vector3<u64>,
     bits_per_dimension: Vector3<u64>,
-    cells: HashMap<u64, Point>,
+    cells: HashMap<u64, (usize, Vector3<f64>)>,
+    matching_points: HashSet<usize>,
 }
 
 impl SparseGrid {
@@ -43,11 +43,11 @@ impl SparseGrid {
             ),
             bits_per_dimension: Vector3::new(x_bits, y_bits, z_bits),
             cells: HashMap::new(),
+            matching_points: Default::default(),
         })
     }
 
-    pub fn insert_point(&mut self, point: Point) -> bool {
-        let point_position = point.position;
+    pub fn insert_point(&mut self, point_position: &Vector3<f64>, point_id: usize) -> bool {
         let rx = (point_position.x - self.bounds.min().x) * self.dimensions.x as f64
             / (self.bounds.max().x - self.bounds.min().x);
         let ry = (point_position.y - self.bounds.min().y) * self.dimensions.y as f64
@@ -71,16 +71,16 @@ impl SparseGrid {
 
         match self.cells.get_mut(&index) {
             None => {
-                self.cells.insert(index, point);
+                self.cells.insert(index, (point_id, *point_position));
+                self.matching_points.insert(point_id);
                 true
             }
-            Some(current_point) => {
+            Some((current_point_id, current_point_position)) => {
                 let cell_center = Point3::new(
                     (cell_x as f64 + 0.5) * self.cell_size + self.bounds.min().x,
                     (cell_y as f64 + 0.5) * self.cell_size + self.bounds.min().y,
                     (cell_z as f64 + 0.5) * self.cell_size + self.bounds.min().z,
                 );
-                let current_point_position = current_point.position;
                 let cur_dist_sqr = distance_squared(
                     &cell_center,
                     &Point3::new(
@@ -95,7 +95,11 @@ impl SparseGrid {
                 );
 
                 if new_dist_sqr < cur_dist_sqr {
-                    *current_point = point;
+                    self.matching_points.remove(*&current_point_id);
+                    self.matching_points.insert(point_id);
+
+                    *current_point_position = *point_position;
+                    *current_point_id = point_id;
                     true
                 } else {
                     false
@@ -108,8 +112,12 @@ impl SparseGrid {
         self.cells.keys()
     }
 
-    pub fn points(&self) -> impl Iterator<Item = &Point> {
+    pub fn points(&self) -> impl Iterator<Item = &(usize, Vector3<f64>)> {
         self.cells.values()
+    }
+
+    pub fn matches(&self, point_id: usize) -> bool {
+        self.matching_points.contains(&point_id)
     }
 }
 
@@ -124,10 +132,7 @@ mod tests {
         let bounds = AABB::from_min_max(Point3::new(-5.0, -5.0, -5.0), Point3::new(5.0, 5.0, 5.0));
         let mut grid = SparseGrid::new(bounds, 1.0)?;
 
-        grid.insert_point(Point {
-            position: Vector3::new(-4.5, -4.6, -4.7),
-            ..Default::default()
-        });
+        grid.insert_point(&Vector3::new(-4.5, -4.6, -4.7), 0);
 
         let cells = grid.cells().collect::<Vec<_>>();
         assert_eq!(cells.len(), 1);
@@ -136,7 +141,7 @@ mod tests {
         let points = grid.points().collect::<Vec<_>>();
         assert_eq!(points.len(), 1);
 
-        let first_point_position = points[0].position;
+        let first_point_position = points[0].1;
         assert_eq!(first_point_position.x, -4.5);
         assert_eq!(first_point_position.y, -4.6);
         assert_eq!(first_point_position.z, -4.7);
@@ -150,18 +155,12 @@ mod tests {
         let mut grid = SparseGrid::new(bounds, 1.0)?;
 
         let expected_points = vec![
-            Point {
-                position: Vector3::new(-4.5, -4.6, -4.7),
-                ..Default::default()
-            },
-            Point {
-                position: Vector3::new(-3.5, -4.5, -4.4),
-                ..Default::default()
-            },
+            Vector3::new(-4.5, -4.6, -4.7),
+            Vector3::new(-3.5, -4.5, -4.4),
         ];
 
-        for point in &expected_points {
-            grid.insert_point(*point);
+        for (id, point) in expected_points.iter().enumerate() {
+            grid.insert_point(point, id);
         }
 
         let cells = grid.cells().copied().collect::<HashSet<_>>();
@@ -169,7 +168,10 @@ mod tests {
         assert_eq!(expected_cells, cells);
 
         // Order of the points is random, but we can't collect them in a HashSet because they also can't implement Eq...
-        let points = grid.points().copied().collect::<Vec<_>>();
+        let points = grid
+            .points()
+            .map(|(_, position)| *position)
+            .collect::<Vec<_>>();
         assert_eq!(points.len(), 2);
 
         let expected_points_different_order =
@@ -192,14 +194,8 @@ mod tests {
         let bounds = AABB::from_min_max(Point3::new(-5.0, -5.0, -5.0), Point3::new(5.0, 5.0, 5.0));
         let mut grid = SparseGrid::new(bounds, 1.0)?;
 
-        grid.insert_point(Point {
-            position: Vector3::new(-4.8, -4.6, -4.7),
-            ..Default::default()
-        });
-        grid.insert_point(Point {
-            position: Vector3::new(-4.5, -4.4, -4.6),
-            ..Default::default()
-        });
+        grid.insert_point(&Vector3::new(-4.8, -4.6, -4.7), 0);
+        grid.insert_point(&Vector3::new(-4.5, -4.4, -4.6), 1);
 
         let cells = grid.cells().collect::<Vec<_>>();
         assert_eq!(cells.len(), 1);
@@ -208,7 +204,7 @@ mod tests {
         let points = grid.points().collect::<Vec<_>>();
         assert_eq!(points.len(), 1);
 
-        let first_point_position = points[0].position;
+        let first_point_position = points[0].1;
         assert_eq!(first_point_position.x, -4.5);
         assert_eq!(first_point_position.y, -4.4);
         assert_eq!(first_point_position.z, -4.6);

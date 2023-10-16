@@ -188,6 +188,9 @@ pub(crate) fn compile_query(
                         Value::NumberOfReturns(number_of_returns) => {
                             Box::new(LasQueryAtomCompare::new(*number_of_returns, *compare_expr))
                         }
+                        Value::LOD(discrete_lod) => {
+                            Box::new(LasQueryAtomCompare::new(*discrete_lod, *compare_expr))
+                        }
                     };
                     Ok(CompiledQueryExpression::Atom(las_expr))
                 }
