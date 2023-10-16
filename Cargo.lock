@@ -583,6 +583,7 @@ dependencies = [
 [[package]]
 name = "exar"
 version = "0.2.0"
+source = "git+https://github.com/Mortano/experiment-archiver-rs?branch=rewrite#2e0589531fb4db7056b27469699e375a1c8b3dbe"
 dependencies = [
  "anyhow",
  "build_id",
