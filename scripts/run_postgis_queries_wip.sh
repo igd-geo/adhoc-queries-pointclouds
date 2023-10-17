@@ -36,8 +36,8 @@ export PC_USER=$PC_USER
 export PC_PASSWORD=$PC_PASSWORD
 export RUST_BACKTRACE=1
 export RUST_LOG=info
-export MACHINE=pc3018
+# export MACHINE=pc3018
 # run locally just to test that queries are correct
-export EXAR_LOCAL=1
+# export EXAR_LOCAL=1
 
 cargo run --release --bin run_postgis_queries

@@ -18,7 +18,10 @@
 use anyhow::{anyhow, bail, Context, Result};
 use log::info;
 use pasture_core::{
-    layout::attributes::{GPS_TIME, NUMBER_OF_RETURNS, RETURN_NUMBER},
+    layout::{
+        attributes::{GPS_TIME, NUMBER_OF_RETURNS, RETURN_NUMBER},
+        PointLayout,
+    },
     math::AABB,
     meta::Metadata,
 };
@@ -59,6 +62,25 @@ pub struct DatasetStats {
     num_files: usize,
     num_points: usize,
     bounds: Option<AABB<f64>>,
+    point_layout: PointLayout,
+}
+
+impl DatasetStats {
+    pub fn num_files(&self) -> usize {
+        self.num_files
+    }
+
+    pub fn num_points(&self) -> usize {
+        self.num_points
+    }
+
+    pub fn bounds(&self) -> Option<&AABB<f64>> {
+        self.bounds.as_ref()
+    }
+
+    pub fn point_layout(&self) -> &PointLayout {
+        &self.point_layout
+    }
 }
 
 impl Display for DatasetStats {
@@ -165,6 +187,9 @@ impl ProgressiveIndex {
     /// will build an initial, very rough block index
     pub fn add_dataset<'a, P: AsRef<Path>>(&mut self, files: &'a [P]) -> Result<DatasetID> {
         info!("Adding new dataset");
+        if files.is_empty() {
+            bail!("No files in dataset");
+        }
 
         let id = self.datasets.len();
         self.input_layer
@@ -192,6 +217,7 @@ impl ProgressiveIndex {
     pub fn dataset_stats(&self, dataset_id: DatasetID) -> DatasetStats {
         let mut num_points: usize = 0;
         let mut global_bounds: Option<AABB<f64>> = None;
+        let mut point_layout: Option<PointLayout> = None;
 
         let num_files = self
             .datasets
@@ -211,12 +237,25 @@ impl ProgressiveIndex {
             } else {
                 global_bounds = Some(bounds);
             }
+
+            let file_point_layout = self
+                .input_layer
+                .get_default_point_layout_of_file(FileHandle(dataset_id, idx))
+                .expect("Could not get default PointLayout of file");
+            if let Some(point_layout) = point_layout.as_ref() {
+                if *point_layout != file_point_layout {
+                    panic!("All files must have the same PointLayout!");
+                }
+            } else {
+                point_layout = Some(file_point_layout);
+            }
         }
 
         DatasetStats {
             num_files,
             num_points,
             bounds: global_bounds,
+            point_layout: point_layout.expect("No files found in dataset"),
         }
     }
 

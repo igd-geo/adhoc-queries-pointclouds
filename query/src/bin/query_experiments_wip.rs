@@ -237,7 +237,7 @@ fn get_files_with_extension<P: AsRef<Path>>(extension: &str, path: P) -> Vec<Pat
 }
 
 fn main() -> Result<()> {
-    dotenv::dotenv().context("Failed to initialize with .env file")?;
+    // dotenv::dotenv().context("Failed to initialize with .env file")?;
     pretty_env_logger::init();
 
     let args = Args::parse();
@@ -262,8 +262,8 @@ fn main() -> Result<()> {
     ];
 
     let output_point_layouts = [
-        ("All (default)", point_layout_from_las_point_format(&Format::new(1)?, false)?),
-        ("All (native)", point_layout_from_las_point_format(&Format::new(1)?, true)?),
+        ("All (default)", point_layout_from_las_point_format(&Format::new(6)?, false)?),
+        ("All (native)", point_layout_from_las_point_format(&Format::new(6)?, true)?),
         ("Positions", [POSITION_3D].into_iter().collect::<PointLayout>()),
         ("Positions, classifications, intensities", [POSITION_3D, CLASSIFICATION, INTENSITY]
             .into_iter()
