@@ -1,7 +1,7 @@
 use std::{
     ffi::OsStr,
     fs::File,
-    io::{BufWriter, Cursor},
+    io::BufWriter,
     path::{Path, PathBuf},
     sync::atomic::{AtomicUsize, Ordering},
 };
@@ -11,11 +11,10 @@ use clap::Parser;
 use io::lazer::LazerWriter;
 use log::info;
 use lz4::EncoderBuilder;
-use pasture_core::containers::ExternalMemoryBuffer;
+use pasture_core::containers::{BorrowedBuffer, OwningBuffer, SliceBuffer, VectorBuffer};
 use pasture_io::{
-    base::PointWriter,
-    las::point_layout_from_las_point_format,
-    las_rs::{point::Format, raw, Builder},
+    base::{PointReader, PointWriter},
+    las::LASReader,
 };
 use rayon::prelude::*;
 
@@ -102,30 +101,52 @@ fn get_all_input_output_file_pairings(args: &Args) -> Result<Vec<(PathBuf, PathB
 }
 
 fn las_to_lazer(las_path: &Path, lazer_path: &Path, encoder_builder: EncoderBuilder) -> Result<()> {
-    let las_file_bytes = std::fs::read(las_path)?;
-    let (las_points, raw_header) = {
-        let header = raw::Header::read_from(Cursor::new(&las_file_bytes))?;
-        let offset_to_point_data = header.offset_to_point_data as usize;
-        let point_layout = point_layout_from_las_point_format(
-            &Format::new(header.point_data_record_format)?,
-            true,
-        )?;
-        (
-            ExternalMemoryBuffer::new(&las_file_bytes[offset_to_point_data..], point_layout),
-            header,
-        )
-    };
-    let las_header = Builder::new(raw_header)?.into_header()?;
+    // let las_file_bytes = std::fs::read(las_path)?;
+    // let (las_points, raw_header) = {
+    //     let header = raw::Header::read_from(Cursor::new(&las_file_bytes))?;
+    //     let num_points = if let Some(large_file) = header.large_file.as_ref() {
+    //         large_file.number_of_point_records as usize
+    //     } else {
+    //         header.number_of_point_records as usize
+    //     };
+    //     let offset_to_point_data = header.offset_to_point_data as usize;
+    //     let point_data_end = offset_to_point_data + (num_points * header.point_data_record_length as usize);
+    //     let point_layout = point_layout_from_las_point_format(
+    //         &Format::new(header.point_data_record_format)?,
+    //         true,
+    //     )?;
+    //     (
+    //         ExternalMemoryBuffer::new(&las_file_bytes[offset_to_point_data..point_data_end], point_layout),
+    //         header,
+    //     )
+    // };
+    // let las_header = Builder::new(raw_header)?.into_header()?;
+
+    let mut las_reader = LASReader::from_path(las_path, true)
+        .with_context(|| format!("Could not open reader for LAS file {}", las_path.display()))?;
+    let header = las_reader.header();
+    let mut read_buffer =
+        VectorBuffer::with_capacity(1_000_000, las_reader.get_default_point_layout().clone());
+    read_buffer.resize(1_000_000);
 
     let lazer_file = BufWriter::new(
         File::create(lazer_path)
             .with_context(|| format!("Could not create LAZER file {}", lazer_path.display()))?,
     );
-    let mut lazer_writer = LazerWriter::new(lazer_file, las_header, encoder_builder)
+    let mut lazer_writer = LazerWriter::new(lazer_file, header.clone(), encoder_builder)
         .context("Could not open LAZER writer")?;
-    lazer_writer
-        .write(&las_points)
-        .context("Failed to write points to LAZER file")?;
+    loop {
+        let num_points_read = las_reader
+            .read_into(&mut read_buffer, 1_000_000)
+            .context("Failed to read points")?;
+        lazer_writer
+            .write(&read_buffer.slice(0..num_points_read))
+            .context("Failed to write points to LAZER file")?;
+
+        if num_points_read < read_buffer.len() {
+            break;
+        }
+    }
     lazer_writer.flush().context("Failed to flush LAZER file")?;
 
     Ok(())

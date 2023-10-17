@@ -13,7 +13,7 @@ use pasture_core::{
 };
 use pasture_io::{
     base::{PointReader, PointWriter, SeekToPoint},
-    las::{point_layout_from_las_point_format, LASMetadata},
+    las::{point_layout_from_las_metadata, point_layout_from_las_point_format, LASMetadata},
     las_rs::{
         point::Format,
         raw::{self, vlr::RecordLength},
@@ -672,6 +672,11 @@ impl<W: Write + Seek> LazerWriter<W> {
             bail!("Writing LAZER file with extended VLRs is currently unsupported");
         }
 
+        let metadata: LASMetadata = las_header
+            .clone()
+            .try_into()
+            .context("Failed to parse LAS header")?;
+
         let vlrs = las_header.vlrs().clone();
         let mut raw_header = las_header
             .into_raw()
@@ -714,13 +719,7 @@ impl<W: Write + Seek> LazerWriter<W> {
         }
         raw_header.offset_to_point_data = offset_to_point_records as u32;
 
-        let point_format = Format::new(raw_header.point_data_record_format).with_context(|| {
-            anyhow!(
-                "Invalid LAS point record format {}",
-                raw_header.point_data_record_format
-            )
-        })?;
-        let default_point_layout = point_layout_from_las_point_format(&point_format, true)
+        let default_point_layout = point_layout_from_las_metadata(&metadata, true)
             .context("Could not determine default PointLayout for LAS point record format")?;
         let encoders =
             Self::create_encoders_for_point_layout(&default_point_layout, &encoder_builder)
