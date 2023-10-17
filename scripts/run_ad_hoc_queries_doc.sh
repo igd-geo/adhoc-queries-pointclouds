@@ -18,4 +18,4 @@ export RUST_BACKTRACE=1
 export RUST_LOG=info
 
 # args: data path (experiment data root), shapefile path
-cargo run --release --bin query_experiments_wip -- $1 $2
+cargo run --release --bin query_experiments_wip -- $1 $2 > /dev/null
