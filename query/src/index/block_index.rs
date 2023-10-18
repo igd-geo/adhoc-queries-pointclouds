@@ -1,18 +1,21 @@
-use std::{fmt::Display, ops::Range, path::PathBuf};
+use std::{fmt::Display, ops::Range, collections::HashMap};
 
-use anyhow::Result;
+use anyhow::{anyhow, Result, Context};
+use divide_range::RangeDivisions;
 use geo::{coord, Intersects, Contains};
-use itertools::Itertools;
 use pasture_core::{
     math::AABB,
-    nalgebra::{Point3, Vector3},
+    nalgebra::{Point3, Vector3}, layout::attributes::{CLASSIFICATION, POSITION_3D}, containers::BorrowedBuffer,
 };
+use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 
 // use crate::io::{open_reader, PointReader};
 
-use super::{AtomicExpression, CompareExpression, Index, IndexResult, Value, ValueType, Geometry};
+use crate::io::InputLayer;
+
+use super::{AtomicExpression, CompareExpression, Index, IndexResult, Value, ValueType, Geometry, DatasetID};
 
 // TODO pasture_core does not support serde, maybe implement it?
 
@@ -76,7 +79,7 @@ impl PositionIndex {
             if index_is_fully_contained {
                 IndexResult::MatchAll
             } else {
-                IndexResult::MatchSome
+                IndexResult::MatchSome(None)
             }
         }
     }
@@ -99,7 +102,7 @@ impl PositionIndex {
                     if polygon.contains(&self_bounds_as_2d_rect) {
                         IndexResult::MatchAll
                     } else {
-                        IndexResult::MatchSome
+                        IndexResult::MatchSome(None)
                     }
                 }
             }
@@ -116,13 +119,13 @@ impl Index for PositionIndex {
             AtomicExpression::Within(range) => {
                 match (range.start, range.end) {
                     (Value::Position(min_pos), Value::Position(max_pos)) => self.within(&min_pos.0, &max_pos.0),
-                    (Value::LOD(_), Value::LOD(_)) => IndexResult::MatchSome,
+                    (Value::LOD(_), Value::LOD(_)) => IndexResult::MatchSome(None),
                     (other_start, other_end) => panic!("Encountered invalid values ({},{}) for range of 'Within' expression", other_start.value_type(), other_end.value_type()),
                 }
             },
             AtomicExpression::Compare((_, value)) => {
                 match value {
-                    Value::LOD(_) => IndexResult::MatchSome,
+                    Value::LOD(_) => IndexResult::MatchSome(None),
                     other => panic!("Encountered invalid value {other} for 'Compare' expression"),
                 }
             }
@@ -210,7 +213,7 @@ impl ClassificationIndex {
         } else if matches_within_range == num_points_in_block {
             IndexResult::MatchAll
         } else {
-            IndexResult::MatchSome
+            IndexResult::MatchSome(Some(matches_within_range))
         }
     }
 }
@@ -235,7 +238,7 @@ impl Index for ClassificationIndex {
                         } else if num_matches == num_points_in_block {
                             IndexResult::MatchAll
                         } else {
-                            IndexResult::MatchSome
+                            IndexResult::MatchSome(Some(num_matches))
                         }
                     },
                     other => panic!("Encountered invalid value in 'Compare' expression. Expected Classification but got {} instead", other.value_type()),
@@ -307,7 +310,7 @@ impl Block {
     /// Minimum size of a block in a block index. This constant seems reasonable because at some point the
     /// overhead of checking an index outweighs its benefit. e.g. the extreme case where there is one block
     /// per point, that would waste a huge amount of memory and performance
-    pub const MIN_BLOCK_SIZE: usize = 1 << 10;
+    pub const MIN_BLOCK_SIZE: usize = 50_000;
 
     pub fn new(points_in_file: Range<usize>, file_index: usize) -> Self {
         Self {
@@ -360,14 +363,21 @@ impl Block {
         self.point_range.file_index
     }
 
+    /// Is this block fully refined?
+    pub fn is_fully_refined(&self) -> bool {
+        self.point_range.points_in_file.len() <= Self::MIN_BLOCK_SIZE
+    }
+
     /// Refines this block using the given data at the given indices (all indices that are `true` in `matching_indices`)
     /// Returns one block if no refinement can be done, or multiple blocks after refinement
     pub fn refine(
         &self,
         value_type: ValueType,
-        // reader: &mut dyn PointReader,
+        input_layer: &InputLayer,
+        dataset_id: DatasetID,
     ) -> Result<Vec<Block>> {
-        todo!()
+        assert!(self.point_range.points_in_file.len() >= Self::MIN_BLOCK_SIZE, "RefinementStrategy must not select a Block for refinement which is already fully refined");
+
         // So either we have an index, in which case we split it up into smaller indices, or we don't, in which
         // case we still could create the smaller number of indices (because the RefinementStrategy has determined
         // that we have the time to refine this index, which means we have the time to scan through all points of
@@ -375,63 +385,65 @@ impl Block {
 
         // Depending on how large the block is, split it into either 2 or 4 sub-blocks
         // We can experiment with refinement strategies here, this is just a first test
-        // let num_splits = match self.point_range.points_in_file.len() / Self::MIN_BLOCK_SIZE {
-        //     0..=1 => panic!("Should not refine block that is less than 2x the MIN_BLOCK_SIZE"),
-        //     2..=3 => 2,
-        //     _ => 4,
-        // };
+        let num_splits = match self.point_range.points_in_file.len() / Self::MIN_BLOCK_SIZE {
+            0..=1 => panic!("Should not refine block that is less than 2x the MIN_BLOCK_SIZE"),
+            2..=3 => 2,
+            _ => 4,
+        };
 
-        // let new_block_ranges = self
-        //     .point_range
-        //     .points_in_file
-        //     .clone()
-        //     .divide_evenly_into(num_splits);
+        let new_block_ranges = self
+            .point_range
+            .points_in_file
+            .clone()
+            .divide_evenly_into(num_splits);
 
-        // match value_type {
-        //     ValueType::Classification => {
-        //         let classifications = reader
-        //             .read_classifications(self.point_range.points_in_file.clone())
-        //             .context("Could not read classifications")?;
+        match value_type {
+            ValueType::Classification => {
+                let classifications_layout = [CLASSIFICATION].into_iter().collect();
+                let point_data = input_layer.get_point_data_in_layout(dataset_id, self.point_range.clone(), &classifications_layout, false)
+                    .with_context(|| format!("Could not get classifications for point range {}", self.point_range))?;
 
-        //         let start_index = self.point_range.points_in_file.start;
-        //         Ok(new_block_ranges
-        //             .map(|new_block_range| {
-        //                 let local_range = (new_block_range.start - start_index)
-        //                     ..(new_block_range.end - start_index);
-        //                 let classification_index = ClassificationIndex::build_from_classifications(
-        //                     classifications[local_range].into_iter().copied(),
-        //                 );
-        //                 Block::with_index(
-        //                     new_block_range,
-        //                     self.point_range.file_index,
-        //                     Box::new(classification_index),
-        //                 )
-        //             })
-        //             .collect())
-        //     }
-        //     ValueType::Position3D => {
-        //         let positions = reader
-        //             .read_positions(self.point_range.points_in_file.clone())
-        //             .context("Could not read positions")?;
+                let start_index = self.point_range.points_in_file.start;
+                Ok(new_block_ranges
+                    .map(|new_block_range| {
+                        let local_range = (new_block_range.start - start_index)
+                            ..(new_block_range.end - start_index);
+                        let classifications = point_data.view_attribute::<u8>(&CLASSIFICATION).into_iter();
+                        let classification_index = ClassificationIndex::build_from_classifications(
+                            classifications.skip(local_range.start).take(local_range.len())
+                        );
+                        Block::with_index(
+                            new_block_range,
+                            self.point_range.file_index,
+                            Box::new(classification_index),
+                        )
+                    })
+                    .collect())
+            }
+            ValueType::Position3D => {
+                let positions_layouts = [POSITION_3D].into_iter().collect();
+                let point_data = input_layer.get_point_data_in_layout(dataset_id, self.point_range.clone(), &positions_layouts, true)
+                    .with_context(|| format!("Could not get positions for point range {}", self.point_range))?;
 
-        //         let start_index = self.point_range.points_in_file.start;
-        //         Ok(new_block_ranges
-        //             .map(|new_block_range| {
-        //                 let local_range = (new_block_range.start - start_index)
-        //                     ..(new_block_range.end - start_index);
-        //                 let positions_index = PositionIndex::build_from_positions(
-        //                     positions[local_range].into_iter().copied(),
-        //                 );
-        //                 Block::with_index(
-        //                     new_block_range,
-        //                     self.point_range.file_index,
-        //                     Box::new(positions_index),
-        //                 )
-        //             })
-        //             .collect())
-        //     },
-        //     _ => unimplemented!(),
-        // }
+                let start_index = self.point_range.points_in_file.start;
+                Ok(new_block_ranges
+                    .map(|new_block_range| {
+                        let local_range = (new_block_range.start - start_index)
+                            ..(new_block_range.end - start_index);
+                        let positions = point_data.view_attribute::<Vector3<f64>>(&POSITION_3D).into_iter();
+                        let positions_index = PositionIndex::build_from_positions(
+                            positions.skip(local_range.start).take(local_range.len())
+                        );
+                        Block::with_index(
+                            new_block_range,
+                            self.point_range.file_index,
+                            Box::new(positions_index),
+                        )
+                    })
+                    .collect())
+            },
+            _ => unimplemented!(),
+        }
     }
 }
 
@@ -462,50 +474,32 @@ impl BlockIndex {
     }
 
     /// Apply the given index refinements to this BlockIndex
-    pub fn apply_refinements<I: Iterator<Item = PointRange>>(
+    pub fn apply_refinements<I: IntoParallelIterator<Item = PointRange>>(
         &mut self,
         blocks_to_refine: I,
         value_type: ValueType,
-        files: &[PathBuf],
+        input_layer: &InputLayer,
+        dataset_id: DatasetID,
     ) -> Result<()> {
-        // We can refine all blocks that are passed to this method because candidate selection happens within the
-        // ProgressiveIndex
-        
-        for (file_index, blocks_in_file) in &blocks_to_refine.group_by(|block| block.file_index) {
-            todo!()
-        }
+        // Create the refined blocks in parallel and memorize the index of the old block that they will replace
+        let mut refined_blocks = blocks_to_refine.into_par_iter().map(|block| -> Result<(usize, Vec<Block>)> {
+            let old_block_index = self.blocks.iter().position(|old_block| old_block.point_range == block).ok_or_else(|| anyhow!("No old block for point range {block} found"))?;
+            let block = &self.blocks[old_block_index];
+                    let refined_blocks = block
+                        .refine(value_type, input_layer, dataset_id)
+                        .context("Failed to refine block")?;
+            Ok((old_block_index, refined_blocks))
+        }).collect::<Result<HashMap<_, _>>>()?;
 
+        // Overwrite old blocks with new blocks
+        self.blocks = self.blocks.drain(..).enumerate().map(|(index, old_block)| {
+            if let Some(new_blocks) = refined_blocks.remove(&index) {
+                new_blocks.into_iter()
+            } else {
+                vec![old_block].into_iter()
+            }
+        }).flatten().collect();
+    
         Ok(())
-
-        //     let mut reader = open_reader(&files[file_index]).context(format!(
-        //         "Can't open reader to file {}",
-        //         files[file_index].display()
-        //     ))?;
-
-        //     // Refine all blocks that are large enough to be refined. We can't guarantee that the refinement strategy
-        //     // always gives valid blocks, since users might implement their own refinement strategy
-        //     for block_in_file in blocks_in_file
-        //         .filter(|block| block.points_in_file.len() >= 2 * Block::MIN_BLOCK_SIZE)
-        //     {
-        //         // TODO Maybe we won't find the exact block, because the input ranges might have been combined? But I think
-        //         // I implemented it in a way that we always get exact matches and never combine the 'to-refine' ranges!
-        //         let position_of_old_block = self
-        //             .blocks
-        //             .iter()
-        //             .position(|block| block.point_range == block_in_file)
-        //             .expect("Original block for refinement not found!");
-
-        //         let block = &self.blocks[position_of_old_block];
-        //         let refined_blocks = block
-        //             .refine(value_type, reader.as_mut())
-        //             .context("Failed to refine block")?;
-        //         self.blocks.splice(
-        //             position_of_old_block..=position_of_old_block,
-        //             refined_blocks,
-        //         );
-        //     }
-        // }
-
-        // Ok(())
     }
 }

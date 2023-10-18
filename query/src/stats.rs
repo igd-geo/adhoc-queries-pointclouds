@@ -14,34 +14,44 @@ pub struct QueryStats {
     pub total_points_queried: usize,
     pub matching_points: usize,
     pub runtime: Duration,
+    pub refinement_time: Duration,
 }
 
 impl Display for QueryStats {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        writeln!(f, "Runtime: {}", self.runtime.human_duration())?;
         writeln!(
             f,
-            "Total blocks queried: {}",
+            "Runtime:               {}",
+            self.runtime.human_duration()
+        )?;
+        writeln!(
+            f,
+            "Refinement time:       {}",
+            self.refinement_time.human_duration()
+        )?;
+        writeln!(
+            f,
+            "Total blocks queried:  {}",
             self.total_blocks_queried.human_count_bare()
         )?;
         writeln!(
             f,
-            "Full match blocks: {}",
+            "Full match blocks:     {}",
             self.full_match_blocks.human_count_bare()
         )?;
         writeln!(
             f,
-            "Partial match blocks: {}",
+            "Partial match blocks:  {}",
             self.partial_match_blocks.human_count_bare()
         )?;
         writeln!(
             f,
-            "Total points queried: {}",
+            "Total points queried:  {}",
             self.total_points_queried.human_count("points")
         )?;
         writeln!(
             f,
-            "Matching points: {}",
+            "Matching points:       {}",
             self.matching_points.human_count("points")
         )?;
         Ok(())

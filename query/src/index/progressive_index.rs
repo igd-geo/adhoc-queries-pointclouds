@@ -144,13 +144,15 @@ impl KnownDataset {
         &mut self,
         refinements: I,
         refinement_strategy: &dyn RefinementStrategy,
+        input_layer: &InputLayer,
+        dataset_id: DatasetID,
     ) -> Result<()> {
         // Group refinements by their index ValueType, then apply each set of refinements to each of the indices
         for (value_type, refinements) in refinements {
             if let Some(index) = self.indices.get_mut(&value_type) {
                 let actual_candidates = refinement_strategy.select_best_candidates(refinements);
                 index
-                    .apply_refinements(actual_candidates.into_iter(), value_type, &self.files)
+                    .apply_refinements(actual_candidates, value_type, input_layer, dataset_id)
                     .context(format!(
                         "Failed to refine index for ValueType {}",
                         value_type
@@ -319,7 +321,9 @@ impl ProgressiveIndex {
         rough_query_result
             .matching_blocks
             .into_par_iter()
-            .map(|(_, blocks)| -> Result<()> {
+            .map(|(_, mut blocks)| -> Result<()> {
+                // Sort blocks so that blocks with many matches are handled first
+                blocks.sort_by(|a,b| a.1.cmp(&b.1));
                 blocks
                     .into_par_iter()
                     .map_with(
@@ -347,7 +351,7 @@ impl ProgressiveIndex {
                                     total_points_queried.fetch_add(block_length, Ordering::SeqCst);
                                     matching_points.fetch_add(block_length, Ordering::SeqCst);
                                 }
-                                super::IndexResult::MatchSome => {
+                                super::IndexResult::MatchSome(_how_many) => {
                                     // We have to run the actual query on this block where only some indices match
                                     // eval() will correctly set the valid indices in 'all_matching_indices', so we don't have to reset this array in every loop iteration
                                     let num_matches = compiled_query.eval(
@@ -384,12 +388,18 @@ impl ProgressiveIndex {
             })
             .collect::<Result<Vec<_>, _>>()?;
 
-        dataset
-            .apply_refinements(
-                rough_query_result.blocks_for_refinement.into_iter(),
-                refinement_strategy,
-            )
-            .context("Failed to refine index")?;
+        let refinement_time = {
+            let timer = Instant::now();
+            dataset
+                .apply_refinements(
+                    rough_query_result.blocks_for_refinement.into_iter(),
+                    refinement_strategy,
+                    &self.input_layer,
+                    dataset_id,
+                )
+                .context("Failed to refine index")?;
+            timer.elapsed()
+        };
 
         // info!(
         //     "Blocks queried: {} full, {} partial ({} total in dataset)",
@@ -407,6 +417,7 @@ impl ProgressiveIndex {
             total_points_queried: total_points_queried.into_inner(),
             matching_points: matching_points.into_inner(),
             runtime: timer.elapsed(),
+            refinement_time,
         })
     }
 

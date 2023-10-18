@@ -1,6 +1,7 @@
+use itertools::Itertools;
 use rustc_hash::FxHashSet;
 
-use super::PointRange;
+use super::{Block, PointRange};
 
 /// Trait for an index refinement strategy that defines which parts of the index shall be refined
 pub trait RefinementStrategy {
@@ -20,5 +21,20 @@ impl RefinementStrategy for NoRefinementStrategy {
         _potential_refinements: FxHashSet<PointRange>,
     ) -> Vec<PointRange> {
         vec![]
+    }
+}
+
+/// Refinement strategy that always refines all blocks that can be refined
+pub struct AlwaysRefinementStrategy;
+
+impl RefinementStrategy for AlwaysRefinementStrategy {
+    fn select_best_candidates(
+        &self,
+        potential_refinements: FxHashSet<PointRange>,
+    ) -> Vec<PointRange> {
+        potential_refinements
+            .into_iter()
+            .filter(|range| range.points_in_file.len() >= 2 * Block::MIN_BLOCK_SIZE)
+            .collect_vec()
     }
 }

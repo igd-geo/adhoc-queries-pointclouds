@@ -18,7 +18,8 @@ use super::{Block, BlockIndex, PointRange};
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 pub enum IndexResult {
     MatchAll,
-    MatchSome,
+    /// Some points match. Depending on the index type, we might know the exact number of points that match
+    MatchSome(Option<usize>),
     NoMatch,
 }
 
@@ -32,9 +33,9 @@ impl Ord for IndexResult {
                     std::cmp::Ordering::Less
                 }
             }
-            IndexResult::MatchSome => match other {
+            IndexResult::MatchSome(self_count) => match other {
                 IndexResult::MatchAll => std::cmp::Ordering::Greater,
-                IndexResult::MatchSome => std::cmp::Ordering::Equal,
+                IndexResult::MatchSome(other_count) => other_count.cmp(self_count),
                 IndexResult::NoMatch => std::cmp::Ordering::Less,
             },
             IndexResult::NoMatch => {
@@ -58,9 +59,15 @@ impl IndexResult {
     pub fn and(self, other: Self) -> Self {
         match (self, other) {
             (IndexResult::MatchAll, IndexResult::MatchAll) => IndexResult::MatchAll,
-            (IndexResult::MatchAll, IndexResult::MatchSome) => IndexResult::MatchSome,
-            (IndexResult::MatchSome, IndexResult::MatchAll) => IndexResult::MatchSome,
-            (IndexResult::MatchSome, IndexResult::MatchSome) => IndexResult::MatchSome,
+            (IndexResult::MatchAll, IndexResult::MatchSome(how_many)) => {
+                IndexResult::MatchSome(how_many)
+            }
+            (IndexResult::MatchSome(how_many), IndexResult::MatchAll) => {
+                IndexResult::MatchSome(how_many)
+            }
+            (IndexResult::MatchSome(l_count), IndexResult::MatchSome(r_count)) => {
+                IndexResult::MatchSome(l_count.min(r_count))
+            }
             (IndexResult::NoMatch, _) => IndexResult::NoMatch,
             (_, IndexResult::NoMatch) => IndexResult::NoMatch,
         }
@@ -70,8 +77,11 @@ impl IndexResult {
         match (self, other) {
             (IndexResult::MatchAll, _) => IndexResult::MatchAll,
             (_, IndexResult::MatchAll) => IndexResult::MatchAll,
-            (IndexResult::MatchSome, _) => IndexResult::MatchSome,
-            (_, IndexResult::MatchSome) => IndexResult::MatchSome,
+            (IndexResult::MatchSome(l_count), IndexResult::MatchSome(r_count)) => {
+                IndexResult::MatchSome(l_count.max(r_count))
+            }
+            (IndexResult::MatchSome(how_many), _) => IndexResult::MatchSome(how_many),
+            (_, IndexResult::MatchSome(how_many)) => IndexResult::MatchSome(how_many),
             _ => IndexResult::NoMatch,
         }
     }
@@ -470,14 +480,14 @@ fn query_index(
                     _ => Some((block.point_range(), index_result)),
                 }
             } else {
-                Some((block.point_range(), IndexResult::MatchSome))
+                Some((block.point_range(), IndexResult::MatchSome(None)))
             }
         })
         .collect::<Vec<_>>();
     let refinement_candidates = matching_blocks
         .iter()
         .filter_map(|(block, index_result)| match index_result {
-            IndexResult::MatchSome => Some(block.clone()),
+            IndexResult::MatchSome(_) => Some(block.clone()),
             _ => None,
         })
         .collect::<FxHashSet<_>>();
@@ -704,8 +714,8 @@ mod tests {
 
         let query1_results = query1.eval(&indices);
         let expected_query1_results = vec![
-            (PointRange::new(0, 0..1000), IndexResult::MatchSome),
-            (PointRange::new(1, 0..500), IndexResult::MatchSome),
+            (PointRange::new(0, 0..1000), IndexResult::MatchSome(None)),
+            (PointRange::new(1, 0..500), IndexResult::MatchSome(None)),
         ];
         assert_eq!(expected_query1_results, query1_results.matching_blocks);
 
@@ -727,8 +737,14 @@ mod tests {
         )));
         let query3_results = query3.eval(&indices);
         let expected_query3_results = vec![
-            (PointRange::new(0, 0..1500), IndexResult::MatchSome),
-            (PointRange::new(1, 0..500), IndexResult::MatchSome),
+            (
+                PointRange::new(0, 0..1500),
+                IndexResult::MatchSome(Some(1000)),
+            ),
+            (
+                PointRange::new(1, 0..500),
+                IndexResult::MatchSome(Some(200)),
+            ),
         ];
         assert_eq!(expected_query3_results, query3_results.matching_blocks);
 
@@ -737,7 +753,10 @@ mod tests {
             Value::Classification(Classification(1)),
         )));
         let query4_results = query4.eval(&indices);
-        let expected_query4_results = vec![(PointRange::new(0, 0..1500), IndexResult::MatchSome)];
+        let expected_query4_results = vec![(
+            PointRange::new(0, 0..1500),
+            IndexResult::MatchSome(Some(500)),
+        )];
         assert_eq!(expected_query4_results, query4_results.matching_blocks);
 
         let query5 = QueryExpression::Atomic(AtomicExpression::Within(
@@ -745,8 +764,14 @@ mod tests {
         ));
         let query5_results = query5.eval(&indices);
         let expected_query5_results = vec![
-            (PointRange::new(0, 0..1500), IndexResult::MatchSome),
-            (PointRange::new(1, 0..500), IndexResult::MatchSome),
+            (
+                PointRange::new(0, 0..1500),
+                IndexResult::MatchSome(Some(500)),
+            ),
+            (
+                PointRange::new(1, 0..500),
+                IndexResult::MatchSome(Some(300)),
+            ),
         ];
         assert_eq!(expected_query5_results, query5_results.matching_blocks);
     }
@@ -768,8 +793,8 @@ mod tests {
 
         let query1_results = query1.eval(&indices);
         let expected_query1_results = vec![
-            (PointRange::new(0, 0..1000), IndexResult::MatchSome),
-            (PointRange::new(0, 1000..1500), IndexResult::MatchSome),
+            (PointRange::new(0, 0..1000), IndexResult::MatchSome(None)),
+            (PointRange::new(0, 1000..1500), IndexResult::MatchSome(None)),
         ];
         assert_eq!(expected_query1_results, query1_results.matching_blocks);
 
@@ -785,7 +810,8 @@ mod tests {
         );
 
         let query2_results = query2.eval(&indices);
-        let expected_query2_results = vec![(PointRange::new(1, 0..500), IndexResult::MatchSome)];
+        let expected_query2_results =
+            vec![(PointRange::new(1, 0..500), IndexResult::MatchSome(None))];
         assert_eq!(expected_query2_results, query2_results.matching_blocks);
 
         let query3 = QueryExpression::Or(
@@ -807,8 +833,14 @@ mod tests {
             // complicated... But it IS realistic, an index over positions will have very different structure than an
             // index over classifications...
             // After looking at it some more, I think I'm allowed to combine ranges/blocks (as long as they are within the same file) because query evaluation looks into the files anyway. This could make the code a bit easier
-            (PointRange::new(0, 0..1500), IndexResult::MatchSome),
-            (PointRange::new(1, 0..500), IndexResult::MatchSome),
+            (
+                PointRange::new(0, 0..1500),
+                IndexResult::MatchSome(Some(1000)),
+            ),
+            (
+                PointRange::new(1, 0..500),
+                IndexResult::MatchSome(Some(200)),
+            ),
         ];
         assert_eq!(expected_query3_results, query3_results.matching_blocks);
     }
@@ -837,7 +869,7 @@ mod tests {
                 ));
             } else {
                 let index_result = match string.chars().nth(start_index + 1).unwrap() {
-                    '-' => IndexResult::MatchSome,
+                    '-' => IndexResult::MatchSome(None),
                     '*' => IndexResult::MatchAll,
                     _ => panic!("Invalid character"),
                 };
@@ -874,7 +906,7 @@ mod tests {
             create_matching_blocks_from_str("|*|")
         );
         assert_eq!(
-            vec![(PointRange::new(0, 0..2), IndexResult::MatchSome)],
+            vec![(PointRange::new(0, 0..2), IndexResult::MatchSome(None))],
             create_matching_blocks_from_str("|-|")
         );
 
@@ -892,14 +924,14 @@ mod tests {
             create_matching_blocks_from_str(" |***| ")
         );
         assert_eq!(
-            vec![(PointRange::new(0, 1..5), IndexResult::MatchSome)],
+            vec![(PointRange::new(0, 1..5), IndexResult::MatchSome(None))],
             create_matching_blocks_from_str(" |---| ")
         );
 
         assert_eq!(
             vec![
                 (PointRange::new(0, 0..2), IndexResult::MatchAll),
-                (PointRange::new(0, 4..6), IndexResult::MatchSome)
+                (PointRange::new(0, 4..6), IndexResult::MatchSome(None))
             ],
             create_matching_blocks_from_str("|*| |-|")
         );
@@ -907,7 +939,7 @@ mod tests {
         assert_eq!(
             vec![
                 (PointRange::new(0, 0..2), IndexResult::MatchAll),
-                (PointRange::new(0, 2..4), IndexResult::MatchSome)
+                (PointRange::new(0, 2..4), IndexResult::MatchSome(None))
             ],
             create_matching_blocks_from_str("|*|-|")
         );
@@ -915,7 +947,7 @@ mod tests {
         assert_eq!(
             vec![
                 (PointRange::new(0, 1..5), IndexResult::MatchAll),
-                (PointRange::new(0, 5..9), IndexResult::MatchSome)
+                (PointRange::new(0, 5..9), IndexResult::MatchSome(None))
             ],
             create_matching_blocks_from_str(" |***|---| ")
         );

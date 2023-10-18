@@ -18,9 +18,9 @@ use pasture_io::{
 };
 use query::{
     index::{
-        AtomicExpression, Classification, CompareExpression, DiscreteLod, Geometry, GpsTime,
-        NoRefinementStrategy, NumberOfReturns, Position, ProgressiveIndex, QueryExpression,
-        ReturnNumber, Value,
+        AlwaysRefinementStrategy, AtomicExpression, Classification, CompareExpression, DiscreteLod,
+        Geometry, GpsTime, NoRefinementStrategy, NumberOfReturns, Position, ProgressiveIndex,
+        QueryExpression, ReturnNumber, Value,
     },
     io::{CountOutput, LASOutput, NullOutput, StdoutOutput},
 };
@@ -99,12 +99,12 @@ fn get_query() -> QueryExpression {
         Value::LOD(DiscreteLod(2)),
     )));
 
-    // _all_buildings
-    // _all_buildings
-    QueryExpression::Or(
-        Box::new(doc_time_range_5percent.clone()),
-        Box::new(_doc_aabb_large.clone()),
-    )
+    // _doc_aabb_small
+    _all_buildings
+    // QueryExpression::Or(
+    //     Box::new(doc_time_range_5percent.clone()),
+    //     Box::new(_doc_aabb_large.clone()),
+    // )
 }
 
 fn main() -> Result<()> {
@@ -174,9 +174,15 @@ fn main() -> Result<()> {
 
     let query = get_query();
     eprintln!("Query: {query}");
-    let stats = progressive_index.query(dataset_id, query, &NoRefinementStrategy, &output)?;
-
-    eprintln!("{}", stats);
+    for run_id in 0..5 {
+        let stats = progressive_index.query(
+            dataset_id,
+            query.clone(),
+            &AlwaysRefinementStrategy,
+            &output,
+        )?;
+        eprintln!("Run {run_id}:\n{stats}");
+    }
 
     Ok(())
 }
