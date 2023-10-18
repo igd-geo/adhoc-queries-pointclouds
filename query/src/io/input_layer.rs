@@ -18,7 +18,8 @@ use std::{
 use crate::index::{DatasetID, PointRange};
 
 use super::{
-    BorrowedLasPointData, LASPointDataReader, LASTPointDataReader, LAZERPointDataLoader,
+    BorrowedLasPointData, LASPointDataReaderFile, LASPointDataReaderMmap, LASTPointDataReaderFile,
+    LASTPointDataReaderMmap, LAZERPointDataLoaderFile, LAZERPointDataLoaderMmap,
     LAZPointDataReader,
 };
 
@@ -304,15 +305,40 @@ impl InputLayer {
             path.display()
         ))?;
 
+        // `mmap` on macOS is very slow, so we only use it on other platforms
+        let use_mmap = std::env::consts::OS != "macos";
+
         match file_extension {
-            "las" | "LAS" => LASPointDataReader::new(path)
-                .map(|reader| -> Arc<dyn PointDataLoader> { Arc::new(reader) }),
-            "last" | "LAST" => LASTPointDataReader::new(path)
-                .map(|reader| -> Arc<dyn PointDataLoader> { Arc::new(reader) }),
+            "las" | "LAS" => {
+                if use_mmap {
+                    LASPointDataReaderMmap::new(path)
+                        .map(|reader| -> Arc<dyn PointDataLoader> { Arc::new(reader) })
+                } else {
+                    LASPointDataReaderFile::new(path)
+                        .map(|reader| -> Arc<dyn PointDataLoader> { Arc::new(reader) })
+                }
+            }
+            "last" | "LAST" => {
+                if use_mmap {
+                    LASTPointDataReaderMmap::new(path)
+                        .map(|reader| -> Arc<dyn PointDataLoader> { Arc::new(reader) })
+                } else {
+                    LASTPointDataReaderFile::new(path)
+                        .map(|reader| -> Arc<dyn PointDataLoader> { Arc::new(reader) })
+                }
+            }
+            // LAZ is so slow that it doesn't matter whether we use mmap or buffered files
             "laz" | "LAZ" => LAZPointDataReader::new(path)
                 .map(|reader| -> Arc<dyn PointDataLoader> { Arc::new(reader) }),
-            "lazer" | "LAZER" => LAZERPointDataLoader::new(path)
-                .map(|reader| -> Arc<dyn PointDataLoader> { Arc::new(reader) }),
+            "lazer" | "LAZER" => {
+                if use_mmap {
+                    LAZERPointDataLoaderMmap::new(path)
+                        .map(|reader| -> Arc<dyn PointDataLoader> { Arc::new(reader) })
+                } else {
+                    LAZERPointDataLoaderFile::new(path)
+                        .map(|reader| -> Arc<dyn PointDataLoader> { Arc::new(reader) })
+                }
+            }
             other => Err(anyhow!("Unsupported file extension {other}")),
         }
     }

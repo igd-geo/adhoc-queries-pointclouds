@@ -149,17 +149,13 @@ fn main() -> Result<()> {
     let args = Args::parse();
     let input_files = get_all_input_files(&args).context("Failed to get input files")?;
 
-    match input_files.len() {
-        0 => bail!("No input files found"),
-        1 => {
-            std::fs::copy(input_files[0].as_path(), args.output)?;
-        }
-        _ => {
-            if let Err(e) = merge_files(input_files, &args) {
-                std::fs::remove_file(args.output.as_path())?;
-                return Err(e);
-            }
-        }
+    if input_files.is_empty() {
+        bail!("No input files found");
+    }
+
+    if let Err(e) = merge_files(input_files, &args) {
+        std::fs::remove_file(args.output.as_path())?;
+        return Err(e);
     }
 
     Ok(())

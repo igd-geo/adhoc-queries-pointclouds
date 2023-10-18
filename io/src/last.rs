@@ -132,6 +132,10 @@ impl<R: Read + Seek + Send> LASTReader<R> {
         &self.las_metadata
     }
 
+    pub fn into_inner(self) -> R {
+        self.read
+    }
+
     fn byte_offset_of_attribute_data(&self, attribute: &PointAttributeMember) -> usize {
         self.offset_to_point_records
             + (attribute.offset() as usize * self.las_metadata.point_count())

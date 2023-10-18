@@ -122,7 +122,7 @@ impl PointOutput for StdoutOutput {
                     .fetch_add(interleaved_buffer.len(), Ordering::SeqCst);
             }
             _ => {
-                let points_range = memory.get_point_range_ref(point_range.points_in_file);
+                let points_range = memory.get_point_range_ref(0..memory.len());
 
                 let filtered_memory = points_range
                     .chunks_exact(size_of_point)

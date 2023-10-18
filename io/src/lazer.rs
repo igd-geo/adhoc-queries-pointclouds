@@ -13,11 +13,10 @@ use pasture_core::{
 };
 use pasture_io::{
     base::{PointReader, PointWriter, SeekToPoint},
-    las::{point_layout_from_las_metadata, point_layout_from_las_point_format, LASMetadata},
+    las::{point_layout_from_las_metadata, LASMetadata},
     las_rs::{
-        point::Format,
         raw::{self, vlr::RecordLength},
-        Builder, Header,
+        Builder, Header, Vlr,
     },
 };
 
@@ -240,10 +239,6 @@ impl<R: Read + Seek> LazerReader<R> {
     pub fn new(mut reader: R) -> Result<Self> {
         let raw_las_header =
             raw::Header::read_from(&mut reader).context("Failed to read LAS header")?;
-        let format = Format::new(raw_las_header.point_data_record_format)
-            .context("Invalid point record format")?;
-        let default_point_layout = point_layout_from_las_point_format(&format, true)
-            .context("Could not determine default point layout")?;
 
         let vlrs = (0..raw_las_header.number_of_variable_length_records)
             .map(|_| {
@@ -272,9 +267,9 @@ impl<R: Read + Seek> LazerReader<R> {
             .context("Failed to deserialize blocks EVLR")?;
 
         let las_header = {
-            let header_builder = Builder::new(raw_las_header.clone())
+            let mut header_builder = Builder::new(raw_las_header.clone())
                 .context("Can't create LAS header builder from raw LAS header")?;
-            // header_builder.vlrs = vlrs; // TODO Support VLRs
+            header_builder.vlrs = vlrs.into_iter().map(|raw_vlr| Vlr::new(raw_vlr)).collect();
             header_builder
                 .into_header()
                 .context("Failed to build LAS header")?
@@ -282,6 +277,9 @@ impl<R: Read + Seek> LazerReader<R> {
         let las_metadata = las_header
             .try_into()
             .context("Failed to get LAS metadata information from header")?;
+
+        let default_point_layout = point_layout_from_las_metadata(&las_metadata, true)
+            .context("Could not determine default point layout")?;
 
         // Read all block headers so that we can seek to blocks based on point indices!
         let block_headers = blocks_evlr
@@ -427,6 +425,10 @@ impl<R: Read + Seek> LazerReader<R> {
         self.raw_las_header.number_of_point_records as usize - self.current_point_index
     }
 
+    pub fn into_inner(self) -> R {
+        self.reader
+    }
+
     /// Returns the index of the LAZER block that contains the point at the given index
     fn block_index_for_point(&self, point_index: usize) -> usize {
         assert!(point_index < self.raw_las_header.number_of_point_records as usize);
@@ -499,9 +501,9 @@ impl<R: Read + Seek> LazerReader<R> {
                     attribute.attribute_definition(),
                     point_range_in_buffer.clone(),
                 );
-                decoder
-                    .read_exact(attribute_data)
-                    .with_context(|| format!("Failed to decode data for attribute {attribute}"))?;
+                decoder.read_exact(attribute_data).with_context(|| {
+                    return format!("Failed to decode data for attribute {attribute}");
+                })?;
             }
         } else {
             let largest_attribute = self
@@ -624,25 +626,31 @@ impl<R: Read + Seek> SeekToPoint for LazerReader<R> {
         }
 
         let block_index = self.block_index_for_point(position_from_start);
-        if let Some(current_block_info) = &mut self.current_block {
-            let index_of_first_point_in_block = self.block_headers[block_index].0;
-            let relative_offset_within_block = position_from_start - index_of_first_point_in_block;
-            current_block_info.current_position_within_block = relative_offset_within_block;
-        } else {
-            self.begin_decode_block(block_index)
-                .context("Failed to decode LAZER block")?;
-            let index_of_first_point_in_block = self.block_headers[block_index].0;
-            let relative_offset_within_block = position_from_start - index_of_first_point_in_block;
+        // if let Some(current_block_info) = self.current_block.as_mut().and_then(|block| {
+        //     if block.block_index == block_index {
+        //         Some(block)
+        //     } else {
+        //         None
+        //     }
+        // }) {
+        //     let index_of_first_point_in_block = self.block_headers[block_index].0;
+        //     let relative_offset_within_block = position_from_start - index_of_first_point_in_block;
+        //     current_block_info.current_position_within_block = relative_offset_within_block;
+        // } else {
+        self.begin_decode_block(block_index)
+            .context("Failed to decode LAZER block")?;
+        let index_of_first_point_in_block = self.block_headers[block_index].0;
+        let relative_offset_within_block = position_from_start - index_of_first_point_in_block;
 
-            self.advance_current_block(relative_offset_within_block)
-                .context("Failed to seek within compressed LAZER block")?;
+        self.advance_current_block(relative_offset_within_block)
+            .context("Failed to seek within compressed LAZER block")?;
 
-            let current_block_info = self
-                .current_block
-                .as_mut()
-                .expect("current block is None after call to self.decode_block");
-            current_block_info.current_position_within_block = relative_offset_within_block;
-        }
+        let current_block_info = self
+            .current_block
+            .as_mut()
+            .expect("current block is None after call to self.decode_block");
+        current_block_info.current_position_within_block = relative_offset_within_block;
+        // }
 
         Ok(position_from_start)
     }
@@ -977,6 +985,10 @@ mod tests {
         layout::{attributes::POSITION_3D, PointAttributeDataType},
         nalgebra::Vector3,
     };
+    use pasture_io::{
+        las::{point_layout_from_las_point_format, LASReader},
+        las_rs::point::Format,
+    };
 
     use super::*;
 
@@ -985,20 +997,12 @@ mod tests {
         let in_file_path =
             "/Users/pbormann/data/geodata/pointclouds/datasets/district_of_columbia/1318_1.las";
 
-        let las_file_bytes = std::fs::read(in_file_path)?;
-        let (las_points, raw_header) = {
-            let header = raw::Header::read_from(Cursor::new(&las_file_bytes))?;
-            let offset_to_point_data = header.offset_to_point_data as usize;
-            let point_layout = point_layout_from_las_point_format(
-                &Format::new(header.point_data_record_format)?,
-                true,
-            )?;
-            (
-                ExternalMemoryBuffer::new(&las_file_bytes[offset_to_point_data..], point_layout),
-                header,
-            )
+        let (las_points, las_header) = {
+            let mut las_reader = LASReader::from_path(in_file_path, true)?;
+            let header = las_reader.header().clone();
+            let points = las_reader.read::<VectorBuffer>(las_reader.remaining_points())?;
+            (points, header)
         };
-        let las_header = Builder::new(raw_header)?.into_header()?;
 
         let mut lazer_writer = LazerWriter::new(
             Cursor::new(Vec::<u8>::default()),

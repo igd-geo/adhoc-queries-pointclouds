@@ -232,7 +232,6 @@ pub(crate) fn eval_impl<F: FnMut(U) -> Result<bool>, U: PrimitiveType>(
         super::WhichIndicesToLoopOver::All => {
             assert!(block.points_in_file.len() <= matching_indices.len());
             for (point_data, index_matches) in point_data
-                .skip(block.points_in_file.start)
                 .zip(matching_indices.iter_mut())
                 .take(block.points_in_file.len())
             {
@@ -252,7 +251,6 @@ pub(crate) fn eval_impl<F: FnMut(U) -> Result<bool>, U: PrimitiveType>(
         }
         super::WhichIndicesToLoopOver::Matching => {
             for (point_data, index_matches) in point_data
-                .skip(block.points_in_file.start)
                 .zip(matching_indices.iter_mut())
                 .take(block.points_in_file.len())
                 .filter(|(_, is_match)| **is_match)
@@ -277,7 +275,6 @@ pub(crate) fn eval_impl<F: FnMut(U) -> Result<bool>, U: PrimitiveType>(
         }
         super::WhichIndicesToLoopOver::NotMatching => {
             for (point_data, index_matches) in point_data
-                .skip(block.points_in_file.start)
                 .zip(matching_indices.iter_mut())
                 .take(block.points_in_file.len())
                 .filter(|(_, is_match)| !**is_match)

@@ -16,6 +16,7 @@
 //      3.5) Implement some refinement procedure that generates or improves the index for each block (this is TBD)
 
 use anyhow::{anyhow, bail, Context, Result};
+use itertools::Itertools;
 use log::info;
 use pasture_core::{
     layout::{
@@ -358,6 +359,7 @@ impl ProgressiveIndex {
                                         WhichIndicesToLoopOver::All,
                                         &runtime_tracker,
                                     )?;
+
                                     data_output.output(
                                         &self.input_layer,
                                         dataset_id,
@@ -416,6 +418,11 @@ impl ProgressiveIndex {
 
 // const INITIAL_BLOCK_SIZE: usize = 50_000; // Same size as the default LAZ block size
 
+/// Maximum size of a Block in the BlockIndex. We set an upper bound for two reasons:
+/// 1) To enable parallelization even if we only have one (large) file
+/// 2) To prevent excessive memory usage for large files that otherwise would have just one block
+const MAX_BLOCK_SIZE: usize = 1_000_000;
+
 fn build_initial_block_indices<P: AsRef<Path>>(
     files: &'_ [P],
     dataset_id: DatasetID,
@@ -440,35 +447,45 @@ fn build_initial_block_indices<P: AsRef<Path>>(
         let point_count = las_metadata
             .number_of_points()
             .ok_or(anyhow!("Can't determine number of points"))?;
-        let bounds = las_metadata.bounds().ok_or(anyhow!("Can't get bounds"))?;
-        // let num_blocks = (point_count + INITIAL_BLOCK_SIZE - 1) / INITIAL_BLOCK_SIZE;
-        // for block_idx in 0..num_blocks {
-        //     let block_start = block_idx * INITIAL_BLOCK_SIZE;
-        //     let block_end = (block_start + INITIAL_BLOCK_SIZE).min(point_count);
-        //     blocks.push(Block::new(block_start..block_end, file_id));
-        // }
+        let num_blocks = (point_count + MAX_BLOCK_SIZE - 1) / MAX_BLOCK_SIZE;
+        let block_point_ranges = (0..num_blocks)
+            .map(|block_index| {
+                let point_start = block_index * MAX_BLOCK_SIZE;
+                let point_end = ((block_index + 1) * MAX_BLOCK_SIZE).min(point_count);
+                point_start..point_end
+            })
+            .collect_vec();
 
-        // Create one block per file and add a position index to it (we can do that because we have the bounds in the LAS header)
-        let mut block = Block::new(0..point_count, file_id);
-        let position_index = PositionIndex::new(bounds);
-        block.set_index(Box::new(position_index));
-        if let Some(position_blocks) = blocks_per_value_type.get_mut(&ValueType::Position3D) {
-            position_blocks.push(block);
+        let bounds = las_metadata.bounds().ok_or(anyhow!("Can't get bounds"))?;
+
+        // Create initial blocks for PositionIndex. For larger files, we have multiple blocks that all share the
+        // same bounds, which is pessimistic but still allows parallelization
+        let mut position_blocks = block_point_ranges
+            .iter()
+            .map(|point_range| {
+                let mut block = Block::new(point_range.clone(), file_id);
+                let position_index = PositionIndex::new(bounds);
+                block.set_index(Box::new(position_index));
+                block
+            })
+            .collect_vec();
+
+        if let Some(existing_blocks) = blocks_per_value_type.get_mut(&ValueType::Position3D) {
+            existing_blocks.append(&mut position_blocks);
         } else {
-            blocks_per_value_type.insert(ValueType::Position3D, vec![block]);
+            blocks_per_value_type.insert(ValueType::Position3D, position_blocks);
         }
 
         // Can't create an initial index for classifications because there is no histogram within the header. So we use a block without
         // an index
-        if let Some(classification_blocks) =
-            blocks_per_value_type.get_mut(&ValueType::Classification)
-        {
-            classification_blocks.push(Block::new(0..point_count, file_id));
+        let mut classification_blocks = block_point_ranges
+            .iter()
+            .map(|point_range| Block::new(point_range.clone(), file_id))
+            .collect_vec();
+        if let Some(existing_blocks) = blocks_per_value_type.get_mut(&ValueType::Classification) {
+            existing_blocks.append(&mut classification_blocks);
         } else {
-            blocks_per_value_type.insert(
-                ValueType::Classification,
-                vec![Block::new(0..point_count, file_id)],
-            );
+            blocks_per_value_type.insert(ValueType::Classification, classification_blocks);
         }
 
         // Add indices for other attributes
@@ -485,13 +502,14 @@ fn build_initial_block_indices<P: AsRef<Path>>(
             || point_layout.has_attribute(&ATTRIBUTE_BASIC_FLAGS)
             || point_layout.has_attribute(&ATTRIBUTE_EXTENDED_FLAGS)
         {
+            let mut return_number_blocks = block_point_ranges
+                .iter()
+                .map(|point_range| Block::new(point_range.clone(), file_id))
+                .collect_vec();
             if let Some(blocks) = blocks_per_value_type.get_mut(&ValueType::ReturnNumber) {
-                blocks.push(Block::new(0..point_count, file_id));
+                blocks.append(&mut return_number_blocks);
             } else {
-                blocks_per_value_type.insert(
-                    ValueType::ReturnNumber,
-                    vec![Block::new(0..point_count, file_id)],
-                );
+                blocks_per_value_type.insert(ValueType::ReturnNumber, return_number_blocks);
             }
         }
 
@@ -499,24 +517,26 @@ fn build_initial_block_indices<P: AsRef<Path>>(
             || point_layout.has_attribute(&ATTRIBUTE_BASIC_FLAGS)
             || point_layout.has_attribute(&ATTRIBUTE_EXTENDED_FLAGS)
         {
+            let mut number_of_returns_blocks = block_point_ranges
+                .iter()
+                .map(|point_range| Block::new(point_range.clone(), file_id))
+                .collect_vec();
             if let Some(blocks) = blocks_per_value_type.get_mut(&ValueType::NumberOfReturns) {
-                blocks.push(Block::new(0..point_count, file_id));
+                blocks.append(&mut number_of_returns_blocks);
             } else {
-                blocks_per_value_type.insert(
-                    ValueType::NumberOfReturns,
-                    vec![Block::new(0..point_count, file_id)],
-                );
+                blocks_per_value_type.insert(ValueType::NumberOfReturns, number_of_returns_blocks);
             }
         }
 
         if point_layout.has_attribute(&GPS_TIME) {
+            let mut gps_time_blocks = block_point_ranges
+                .iter()
+                .map(|point_range| Block::new(point_range.clone(), file_id))
+                .collect_vec();
             if let Some(blocks) = blocks_per_value_type.get_mut(&ValueType::GpsTime) {
-                blocks.push(Block::new(0..point_count, file_id));
+                blocks.append(&mut gps_time_blocks);
             } else {
-                blocks_per_value_type.insert(
-                    ValueType::GpsTime,
-                    vec![Block::new(0..point_count, file_id)],
-                );
+                blocks_per_value_type.insert(ValueType::GpsTime, gps_time_blocks);
             }
         }
     }

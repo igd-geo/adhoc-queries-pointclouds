@@ -1,10 +1,10 @@
 use std::{
     ffi::OsStr,
-    path::{Path, PathBuf}, process::Command, fs::OpenOptions, io::Write,
+    path::{Path, PathBuf}, process::Command, fs::OpenOptions, io::Write, borrow::Cow,
 };
 
-use anyhow::{bail, Context, Result};
-use clap::Parser;
+use anyhow::{anyhow, bail, Context, Result};
+use clap::{Parser, ValueEnum};
 use exar::{experiment::ExperimentVersion, variable::GenericValue};
 use geo::MultiPolygon;
 use log::info;
@@ -15,7 +15,7 @@ use pasture_core::{
     },
     nalgebra::Vector3,
 };
-use pasture_io::{las::point_layout_from_las_point_format, las_rs::point::Format};
+use pasture_io::las::{LASReader, point_layout_from_las_metadata};
 use query::{
     index::{
         AtomicExpression, Classification, CompareExpression, Geometry,
@@ -24,22 +24,19 @@ use query::{
     io::StdoutOutput,
     stats::QueryStats,
 };
-use shapefile::{Shape, ShapeReader};
+use shapefile::{Shape, dbase::FieldValue};
 
-const DOC_SHAPEFILE_SMALL_POLY_WITH_HOLES_PATH: &str =
-    "doc_polygon_small_with_holes_1.shp";
-const DOC_SHAPEFILE_SMALL_RECT: &str =
-    "doc_polygon_small.shp";
-const DOC_SHAPEFILE_SMALL_POLY: &str =
-    "doc_polygon_small_2.shp";
-const DOC_SHAPEFILE_LARGE_RECT: &str =
-    "doc_polygon_large_1.shp";
-    const DOC_SHAPEFILE_LARGE_POLY: &str =
-    "doc_polygon_large_1.shp";
+#[derive(ValueEnum, Copy, Clone, Debug)]
+enum Dataset {
+    Doc,
+    CA13,
+    AHN4S,
+}
 
 #[derive(Parser)]
 #[command(author, version, about, long_about = None)]
 struct Args {
+    dataset: Dataset,
     data_path: PathBuf,
     shapefiles_path: PathBuf,
 }
@@ -72,32 +69,53 @@ fn flush_disk_cache() -> Result<()> {
     Ok(())
 }
 
-fn crude_shapefile_parsing(path: impl AsRef<Path>) -> Result<QueryExpression> {
-    let shape_reader = ShapeReader::from_path(path).context("Can't read shapefile")?;
-    let shapes = shape_reader
-        .read()
-        .context("Failed to read shapes from shapefile")?;
-    if shapes.is_empty() {
-        bail!("No shapes found in shapefile");
-    }
-    let first_shape = &shapes[0];
-    match first_shape {
-        Shape::Polygon(poly) => {
-            let geo_polygon: MultiPolygon = poly.clone().into();
+fn parse_shapefile<P: AsRef<Path>>(path: P) -> Result<Vec<(Cow<'static, str>, QueryExpression)>> {
+    let mut reader = shapefile::Reader::from_path(path)?;
+    reader.iter_shapes_and_records().map(|shape_record| -> Result<(Cow<'static, str>, QueryExpression)> {
+        let (shape, record) = shape_record?;
+        let shape_name = match record.get("name").ok_or_else(|| anyhow!("Missing field 'name' in shape"))? {
+            FieldValue::Character(text) => text.clone().unwrap_or_default(),
+            other => bail!("Unexpected attribute value for field 'name' ({other:?}"),
+        };
+        let query = match shape {
+            Shape::Polygon(poly) => {
+                let geo_polygon: MultiPolygon = poly.clone().into();
+                if geo_polygon.0.len() > 1 {
+                    bail!("Shape {shape_name} has more than one Polygons, but only one Polygon per shape is supported currently");
+                }
             let first_polygon = geo_polygon.0[0].clone();
-            Ok(QueryExpression::Atomic(AtomicExpression::Intersects(
+            eprintln!("Shape: {first_polygon:?}");
+            QueryExpression::Atomic(AtomicExpression::Intersects(
                 Geometry::Polygon(first_polygon),
-            )))
-        }
-        _ => bail!("Unsupported shape type"),
+            ))
+            }
+            other => bail!("Invalid Shape, expected Polygon but got {other}"),
+        };
+        Ok((Cow::Owned(shape_name), query))
+    }).collect()
+}
+
+/// Configuration for a specific dataset (file paths, queries, output layouts)
+struct DatasetConfig {
+    dataset_name: &'static str,
+    queries: Vec<(Cow<'static, str>, QueryExpression)>,
+    datasets: Vec<(&'static str, Vec<PathBuf>)>,
+    output_point_layouts: Vec<(&'static str, PointLayout)>,
+}
+
+impl DatasetConfig {
+    pub fn total_runs(&self) -> usize {
+        self.queries.len() * self.datasets.len() * self.output_point_layouts.len()
     }
 }
 
 struct QueryParams {
     query: QueryExpression,
+    query_label: String,
     files: Vec<PathBuf>,
     file_format: &'static str,
     target_layout: PointLayout,
+    layout_label: String,
     flush_disk_cache: bool,
 }
 
@@ -106,7 +124,7 @@ struct OutputStats {
 }
 
 fn run_query(params: QueryParams, run_number: usize, total_runs: usize,) -> Result<(QueryStats, OutputStats)> {
-    info!("Run {run_number:3} / {total_runs:3}: file format: {} - query: {} - output attributes: {}", params.file_format, params.query, params.target_layout);
+    info!("Run {run_number:3} / {total_runs:3}: file format: {} - query: {} - output attributes: {}", params.file_format, params.query_label, params.layout_label);
 
     if params.flush_disk_cache {
         flush_disk_cache().context("Failed to flush disk cache")?;
@@ -136,13 +154,8 @@ fn run_query(params: QueryParams, run_number: usize, total_runs: usize,) -> Resu
 }
 
 /// Returns a collection of queries for the experiment with the district of columbia dataset
-fn experiment_queries_doc(args: &Args) -> Result<Vec<(&'static str, QueryExpression)>> {
-    let small_rect_query = crude_shapefile_parsing(args.shapefiles_path.join(DOC_SHAPEFILE_SMALL_RECT))?;
-    let small_poly_query = crude_shapefile_parsing(args.shapefiles_path.join(DOC_SHAPEFILE_SMALL_POLY))?;
-    let small_poly_with_holes_query =
-        crude_shapefile_parsing(args.shapefiles_path.join(DOC_SHAPEFILE_SMALL_POLY_WITH_HOLES_PATH))?;
-    let large_rect_query_1 = crude_shapefile_parsing(args.shapefiles_path.join(DOC_SHAPEFILE_LARGE_RECT))?;
-    let large_poly_query = crude_shapefile_parsing(args.shapefiles_path.join(DOC_SHAPEFILE_LARGE_POLY))?;
+fn experiment_queries_doc(args: &Args) -> Result<Vec<(Cow<'static, str>, QueryExpression)>> {
+    let shapefile_queries = parse_shapefile(&args.shapefiles_path).with_context(|| format!("Failed to parse shapefile {}", args.shapefiles_path.display()))?;
 
     let aabb_large = QueryExpression::Atomic(AtomicExpression::Within(
         Value::Position(Position(Vector3::new(390000.0, 130000.0, 0.0)))
@@ -170,7 +183,8 @@ fn experiment_queries_doc(args: &Args) -> Result<Vec<(&'static str, QueryExpress
         Value::Classification(Classification(6)),
     )));
 
-    let buildings_in_small_polygon = QueryExpression::And(Box::new(small_poly_query.clone()), Box::new(class_buildings.clone()));
+    let small_polygon_query = shapefile_queries.iter().find(|(name, _)| name == "Polygon small").ok_or_else(|| anyhow!("Missing shape 'Polygon small"))?;
+    let buildings_in_small_polygon = QueryExpression::And(Box::new(small_polygon_query.1.clone()), Box::new(class_buildings.clone()));
 
     let vegetation_classes = QueryExpression::Atomic(AtomicExpression::Within(
         Value::Classification(Classification(3))..Value::Classification(Classification(6))
@@ -201,24 +215,103 @@ fn experiment_queries_doc(args: &Args) -> Result<Vec<(&'static str, QueryExpress
         )
     );
 
-    Ok(vec![
-        ("AABB (small)", aabb_small),
-        ("AABB (large)", aabb_large),
-        ("AABB (full)", aabb_all),
-        ("AABB (none)", aabb_no_matches),
-        ("Rect (small)", small_rect_query),
-        ("Polygon (small)", small_poly_query),
-        ("Rect (large)", large_rect_query_1),
-        ("Polygon (large)", large_poly_query),
-        ("Polygon (holes)", small_poly_with_holes_query),
-        ("Buildings", class_buildings),
-        ("Buildings in small polygon", buildings_in_small_polygon),
-        ("Vegetation", vegetation_classes),
-        ("First returns", first_returns),
-        ("Canopies estimate", canopies_estimate),
-        ("LOD0", lod0),
-        ("LOD3", lod3),
-    ])
+    Ok(shapefile_queries.into_iter().chain([
+        (Cow::Borrowed("AABB (small)"), aabb_small),
+        (Cow::Borrowed("AABB (large)"), aabb_large),
+        (Cow::Borrowed("AABB (full)"), aabb_all),
+        (Cow::Borrowed("AABB (none)"), aabb_no_matches),
+        (Cow::Borrowed("Buildings"), class_buildings),
+        (Cow::Borrowed("Buildings in small polygon"), buildings_in_small_polygon),
+        (Cow::Borrowed("Vegetation"), vegetation_classes),
+        (Cow::Borrowed("First returns"), first_returns),
+        (Cow::Borrowed("Canopies estimate"), canopies_estimate),
+        (Cow::Borrowed("LOD0"), lod0),
+        (Cow::Borrowed("LOD3"), lod3),
+    ].into_iter()).collect())
+}
+
+fn experiment_queries_ahn4s(args: &Args) -> Result<Vec<(Cow<'static, str>, QueryExpression)>> {
+    let bounds_full = QueryExpression::Atomic(
+        AtomicExpression::Within(
+            Value::Position(Position(Vector3::new(120000.0, 481250.0, -8.0)))..Value::Position(
+                Position(Vector3::new(125000.0, 487500.0, 200.0))
+            )
+        )
+    );
+    let bounds_large = QueryExpression::Atomic(
+        AtomicExpression::Within(
+            Value::Position(Position(Vector3::new(122000.0, 481250.0, 0.0)))..Value::Position(
+                Position(Vector3::new(124000.0, 487500.0, 200.0))
+            )
+        )
+    );
+    let bounds_small = QueryExpression::Atomic(
+        AtomicExpression::Within(
+            Value::Position(Position(Vector3::new(122000.0, 481250.0, 0.0)))..Value::Position(
+                Position(Vector3::new(122500.0, 482500.0, 100.0))
+            )
+        )
+    );
+    let bounds_none = QueryExpression::Atomic(
+        AtomicExpression::Within(
+            Value::Position(Position(Vector3::new(100000.0, 481250.0, 0.0)))..Value::Position(
+                Position(Vector3::new(110000.0, 487500.0, 200.0))
+            )
+        )
+    );
+
+    let shapefile_queries = parse_shapefile(&args.shapefiles_path).with_context(|| format!("Failed to parse shapefile {}", args.shapefiles_path.display()))?;
+
+    let class_buildings = QueryExpression::Atomic(AtomicExpression::Compare((
+        CompareExpression::Equals,
+        Value::Classification(Classification(6)),
+    )));
+
+    let small_polygon_query = shapefile_queries.iter().find(|(name, _)| name == "Polygon small").ok_or_else(|| anyhow!("Missing shape 'Polygon small"))?;
+    let buildings_in_small_polygon = QueryExpression::And(Box::new(small_polygon_query.1.clone()), Box::new(class_buildings.clone()));
+
+    let vegetation_classes = QueryExpression::Atomic(AtomicExpression::Within(
+        Value::Classification(Classification(3))..Value::Classification(Classification(6))
+    ));
+
+    let first_returns = QueryExpression::Atomic(AtomicExpression::Compare((
+        CompareExpression::Equals,
+        Value::ReturnNumber(ReturnNumber(1)),
+    )));
+
+    let canopies_estimate = QueryExpression::And(
+        Box::new(QueryExpression::Atomic(AtomicExpression::Compare(
+            (CompareExpression::GreaterThan,
+            Value::NumberOfReturns(NumberOfReturns(1))),
+        ))),
+        Box::new(first_returns.clone()),
+    );
+
+    let lod0 = QueryExpression::Atomic(
+        AtomicExpression::Compare(
+            (CompareExpression::Equals, Value::LOD(DiscreteLod(0))),
+        )
+    );
+
+    let lod3 = QueryExpression::Atomic(
+        AtomicExpression::Compare(
+            (CompareExpression::Equals, Value::LOD(DiscreteLod(3))),
+        )
+    );
+
+    Ok(shapefile_queries.into_iter().chain([
+        (Cow::Borrowed("AABB (full)"), bounds_full),
+        (Cow::Borrowed("AABB (large)"), bounds_large),
+        (Cow::Borrowed("AABB (small)"), bounds_small),
+        (Cow::Borrowed("AABB (none)"), bounds_none),
+        (Cow::Borrowed("Buildings"), class_buildings),
+        (Cow::Borrowed("Buildings in small polygon"), buildings_in_small_polygon),
+        (Cow::Borrowed("Vegetation"), vegetation_classes),
+        (Cow::Borrowed("First returns"), first_returns),
+        (Cow::Borrowed("Canopies estimate"), canopies_estimate),
+        (Cow::Borrowed("LOD0"), lod0),
+        (Cow::Borrowed("LOD3"), lod3),
+    ].into_iter()).collect())
 }
 
 fn get_files_with_extension<P: AsRef<Path>>(extension: &str, path: P) -> Vec<PathBuf> {
@@ -236,61 +329,107 @@ fn get_files_with_extension<P: AsRef<Path>>(extension: &str, path: P) -> Vec<Pat
         .collect()
 }
 
-fn main() -> Result<()> {
-    // dotenv::dotenv().context("Failed to initialize with .env file")?;
-    pretty_env_logger::init();
-
-    let args = Args::parse();
-
-    info!("Ad-hoc query experiment - doc dataset");
-
-    let machine = std::env::var("MACHINE").context("To run experiments, please set the 'MACHINE' environment variable to the name of the machine that you are running this experiment on. This is required so that experiment data can be mapped to the actual machine that ran the experiment. This will typically be the name or system configuration of the computer that runs the experiment.")?;
-
+fn get_doc_config(args: &Args) -> Result<DatasetConfig> {
     let doc_queries =
-        experiment_queries_doc(&args).context("Failed to build queries for doc dataset")?;
+    experiment_queries_doc(&args).context("Failed to build queries for doc dataset")?;
 
     let las_files = get_files_with_extension("las", &args.data_path.join("doc/las"));
     let last_files = get_files_with_extension("last", &args.data_path.join("doc/last"));
     let laz_files = get_files_with_extension("laz", &args.data_path.join("doc/laz"));
     let lazer_files = get_files_with_extension("lazer", &args.data_path.join("doc/lazer"));
 
-    let doc_datasets = [
+    let doc_datasets = vec![
         ("LAS", las_files),
         ("LAST", last_files),
         ("LAZ", laz_files),
         ("LAZER", lazer_files),
     ];
 
-    let output_point_layouts = [
-        ("All (default)", point_layout_from_las_point_format(&Format::new(6)?, false)?),
-        ("All (native)", point_layout_from_las_point_format(&Format::new(6)?, true)?),
+    // Instead of hardcoding the point formats, we get the default and native PointLayouts from the dataset
+    let doc_metadata = LASReader::from_path(&doc_datasets[0].1[0], false).context("Failed to open first file from DoC dataset")?.las_metadata().clone();
+
+    let doc_output_point_layouts = vec![
+        ("All (default)", point_layout_from_las_metadata(&doc_metadata, false)?),
+        ("All (native)", point_layout_from_las_metadata(&doc_metadata, true)?),
         ("Positions", [POSITION_3D].into_iter().collect::<PointLayout>()),
         ("Positions, classifications, intensities", [POSITION_3D, CLASSIFICATION, INTENSITY]
             .into_iter()
             .collect::<PointLayout>()),
     ];
 
+    Ok(DatasetConfig { dataset_name: "doc", queries: doc_queries, datasets: doc_datasets, output_point_layouts: doc_output_point_layouts })
+}
+
+fn get_ahn4s_config(args: &Args) -> Result<DatasetConfig> {
+    let queries =
+    experiment_queries_ahn4s(&args).context("Failed to build queries for AHN4-S dataset")?;
+
+    let las_files = get_files_with_extension("las", &args.data_path.join("ahn4s/las"));
+    let last_files = get_files_with_extension("last", &args.data_path.join("ahn4s/last"));
+    let laz_files = get_files_with_extension("laz", &args.data_path.join("ahn4s/laz"));
+    let lazer_files = get_files_with_extension("lazer", &args.data_path.join("ahn4s/lazer"));
+
+    let datasets = vec![
+        ("LAS", las_files),
+        ("LAST", last_files),
+        ("LAZ", laz_files),
+        ("LAZER", lazer_files),
+    ];
+
+    // Instead of hardcoding the point formats, we get the default and native PointLayouts from the dataset
+    let metadata = LASReader::from_path(&datasets[0].1[0], false).context("Failed to open first file from AHN4-S dataset")?.las_metadata().clone();
+
+    let output_point_layouts = vec![
+        ("All (default)", point_layout_from_las_metadata(&metadata, false)?),
+        ("All (native)", point_layout_from_las_metadata(&metadata, true)?),
+        ("Positions", [POSITION_3D].into_iter().collect::<PointLayout>()),
+        ("Positions, classifications, intensities", [POSITION_3D, CLASSIFICATION, INTENSITY]
+            .into_iter()
+            .collect::<PointLayout>()),
+    ];
+
+    Ok(DatasetConfig { dataset_name: "AHN4-S", queries, datasets, output_point_layouts, })
+}
+
+fn main() -> Result<()> {
+    // dotenv::dotenv().context("Failed to initialize with .env file")?;
+    pretty_env_logger::init();
+
+    let args = Args::parse();
+
+    info!("Ad-hoc query experiment - {:?}", args.dataset);
+
+    let machine = std::env::var("MACHINE").context("To run experiments, please set the 'MACHINE' environment variable to the name of the machine that you are running this experiment on. This is required so that experiment data can be mapped to the actual machine that ran the experiment. This will typically be the name or system configuration of the computer that runs the experiment.")?;
+
     let experiment_description = include_str!("yaml/ad_hoc_queries.yaml");
     let experiment = ExperimentVersion::from_yaml_str(experiment_description).context("Could not get current version of experiment")?;
 
-    let total_runs = doc_queries.len() * output_point_layouts.len() * doc_datasets.len();
+    let dataset_config = match args.dataset {
+        Dataset::Doc => get_doc_config(&args)?,
+        Dataset::AHN4S => get_ahn4s_config(&args)?,
+        _ => unimplemented!(),
+    };
+
+    let total_runs = dataset_config.total_runs() * 2; //x2 for flushing disk cache
     let mut current_run = 0; 
 
     // Dataset is in outermost loop so that - if we don't flush the disk cache - we immediately get results for
     // cached data. Which we might want
-    for (file_format, files) in &doc_datasets {
-        for flush_disk_cache in [false, true] {
-            for (query_label, query) in &doc_queries {
-                for (layout_label, output_layout) in &output_point_layouts {
+    for (file_format, files) in &dataset_config.datasets {
+        for flush_disk_cache in [true, false] {
+            for (query_label, query) in &dataset_config.queries {
+                for (layout_label, output_layout) in &dataset_config.output_point_layouts {
                     let params = QueryParams {
                         files: files.clone(),
                         flush_disk_cache,
                         query: query.clone(),
+                        query_label: query_label.to_string(),
                         target_layout: output_layout.clone(),
+                        layout_label: layout_label.to_string(),
                         file_format,
                     };
                     let experiment_instance = experiment.make_instance([
-                        ("Dataset", GenericValue::String(format!("DoC ({file_format})"))),
+                        ("Dataset", GenericValue::String(format!("{} ({file_format})", dataset_config.dataset_name))),
                         ("Machine", GenericValue::String(machine.clone())),
                         ("System", GenericValue::String("Ad-hoc query engine".to_string())),
                         ("Query", GenericValue::String(query_label.to_string())),

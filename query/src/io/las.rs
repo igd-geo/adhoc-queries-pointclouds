@@ -11,10 +11,17 @@ use pasture_core::{
     },
     nalgebra::Vector3,
 };
-use pasture_io::las::{
-    point_layout_from_las_metadata, LASMetadata, LASReader, ATTRIBUTE_LOCAL_LAS_POSITION,
+use pasture_io::{
+    base::{PointReader, SeekToPoint},
+    las::{point_layout_from_las_metadata, LASMetadata, LASReader, ATTRIBUTE_LOCAL_LAS_POSITION},
 };
-use std::{fs::File, io::Cursor, ops::Range, path::Path, sync::Arc};
+use std::{
+    fs::File,
+    io::{BufReader, Cursor, SeekFrom},
+    ops::Range,
+    path::Path,
+    sync::{Arc, Mutex},
+};
 
 use super::{PointData, PointDataLoader};
 
@@ -81,12 +88,12 @@ impl MappedLASFile {
     }
 }
 
-/// Efficient reader for LAS data
-pub(crate) struct LASPointDataReader {
+/// Efficient reader for LAS data that uses `mmap`
+pub(crate) struct LASPointDataReaderMmap {
     mapped_file: Arc<MappedLASFile>,
 }
 
-impl LASPointDataReader {
+impl LASPointDataReaderMmap {
     pub(crate) fn new(path: &Path) -> Result<Self> {
         let mapped_file = MappedLASFile::map_path(path)
             .with_context(|| format!("Could not mmap LAS file {}", path.display()))?;
@@ -96,7 +103,7 @@ impl LASPointDataReader {
     }
 }
 
-impl PointDataLoader for LASPointDataReader {
+impl PointDataLoader for LASPointDataReaderMmap {
     fn get_point_data(
         &self,
         point_range: Range<usize>,
@@ -189,5 +196,99 @@ impl BorrowedLasPointData {
             },
         }
         .build()
+    }
+}
+
+/// LAS point reader that uses a (buffered) file instead of `mmap`, since this is faster on macOS
+pub(crate) struct LASPointDataReaderFile {
+    metadata: LASMetadata,
+    default_point_layout: PointLayout,
+    las_reader: Mutex<LASReader<'static, BufReader<File>>>,
+}
+
+impl LASPointDataReaderFile {
+    pub(crate) fn new(path: &Path) -> Result<Self> {
+        let las_reader = LASReader::from_path(path, true)?;
+        let metadata = las_reader.las_metadata().clone();
+        Ok(Self {
+            metadata,
+            default_point_layout: las_reader.get_default_point_layout().clone(),
+            las_reader: Mutex::new(las_reader),
+        })
+    }
+}
+
+impl PointDataLoader for LASPointDataReaderFile {
+    fn get_point_data(
+        &self,
+        point_range: Range<usize>,
+        target_layout: &PointLayout,
+        positions_in_world_space: bool,
+    ) -> Result<PointData> {
+        let _span = tracy_client::span!("LAS::get_point_data");
+
+        let points = {
+            let mut reader = self.las_reader.lock().expect("Lock was poisoned");
+            reader.seek_point(SeekFrom::Start(point_range.start as u64))?;
+            reader.read::<VectorBuffer>(point_range.len())?
+        };
+
+        let source_layout = &self.default_point_layout;
+        if target_layout == source_layout && !positions_in_world_space {
+            Ok(PointData::OwnedInterleaved(points))
+        } else {
+            let _span = tracy_client::span!("LAS::get_point_data_with_conversion");
+            // Read the points in target layout!
+            let mut converter =
+                BufferLayoutConverter::for_layouts_with_default(source_layout, target_layout);
+            // By default, LAS positions are in local space, but we might want them in world space, especially if the
+            // dataset contains multiple files. This requires the output PointLayout to have a POSITION_3D attribute!
+            if positions_in_world_space {
+                let source_positions_attribute = ATTRIBUTE_LOCAL_LAS_POSITION;
+                let target_positions_attribute = target_layout
+                    .get_attribute_by_name(POSITION_3D.name())
+                    .ok_or(anyhow!("No POSITION_3D attribute found in target layout"))?;
+                if target_positions_attribute.datatype() != PointAttributeDataType::Vec3f64 {
+                    bail!("Outputting positions in world space is only possible if the POSITION_3D attribute of the output layout has datatype Vec3f64!");
+                }
+
+                let transforms = *self
+                    .metadata
+                    .raw_las_header()
+                    .ok_or(anyhow!("Could not get LAS header"))?
+                    .transforms();
+
+                converter.set_custom_mapping_with_transformation(
+                    &source_positions_attribute,
+                    target_positions_attribute.attribute_definition(),
+                    move |position: Vector3<f64>| -> Vector3<f64> {
+                        Vector3::new(
+                            position.x * transforms.x.scale + transforms.x.offset,
+                            position.y * transforms.y.scale + transforms.y.offset,
+                            position.z * transforms.z.scale + transforms.z.offset,
+                        )
+                    },
+                    false,
+                );
+            }
+            let converted_points = converter.convert::<VectorBuffer, _>(&points);
+            Ok(PointData::OwnedInterleaved(converted_points))
+        }
+    }
+
+    fn mem_size(&self) -> usize {
+        0
+    }
+
+    fn default_point_layout(&self) -> &PointLayout {
+        &self.default_point_layout
+    }
+
+    fn has_positions_in_world_space(&self) -> bool {
+        false
+    }
+
+    fn supports_borrowed_data(&self) -> bool {
+        false
     }
 }

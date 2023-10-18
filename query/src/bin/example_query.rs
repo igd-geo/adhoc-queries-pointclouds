@@ -113,11 +113,11 @@ fn main() -> Result<()> {
     std::thread::sleep(Duration::from_secs(2));
 
     let paths = get_point_files_in_path(Path::new(
-        "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/last",
+        "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/lazer",
     ));
 
     let shapefile_path = Path::new(
-        "/Users/pbormann/data/projects/progressive_indexing/queries/doc_polygon_small_with_holes_1.shp",
+        "/Users/pbormann/data/projects/progressive_indexing/queries/doc/doc_polygon_small_with_holes_1.shp",
     );
     // Very crude, only support reading first shape in shapefile, assuming that it is a polygon
     let shape_reader = ShapeReader::from_path(shapefile_path).context("Can't read shapefile")?;
