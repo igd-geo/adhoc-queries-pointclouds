@@ -86,7 +86,7 @@ fn get_query() -> QueryExpression {
         )))),
     );
 
-    let _doc_time_range_5percent = QueryExpression::Atomic(AtomicExpression::Within(
+    let doc_time_range_5percent = QueryExpression::Atomic(AtomicExpression::Within(
         Value::GpsTime(GpsTime(207011500.0))..Value::GpsTime(GpsTime(207012000.0)),
     ));
 
@@ -99,12 +99,12 @@ fn get_query() -> QueryExpression {
         Value::LOD(DiscreteLod(2)),
     )));
 
-    _all_buildings
     // _all_buildings
-    // QueryExpression::And(
-    //     Box::new(maybe_vegetation.clone()),
-    //     Box::new(_doc_polygon_small.clone()),
-    // )
+    // _all_buildings
+    QueryExpression::Or(
+        Box::new(doc_time_range_5percent.clone()),
+        Box::new(_doc_aabb_large.clone()),
+    )
 }
 
 fn main() -> Result<()> {
@@ -113,7 +113,7 @@ fn main() -> Result<()> {
     std::thread::sleep(Duration::from_secs(2));
 
     let paths = get_point_files_in_path(Path::new(
-        "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/lazer",
+        "/Users/pbormann/data/projects/progressive_indexing/experiment_data/doc/las",
     ));
 
     let shapefile_path = Path::new(
@@ -155,10 +155,10 @@ fn main() -> Result<()> {
     let stats = progressive_index.dataset_stats(dataset_id);
     eprintln!("Stats:\n{stats}");
 
-    let output = LASOutput::new(
-        "doc_buildings.las",
-        &point_layout_from_las_point_format(&Format::new(6)?, false)?,
-    )?;
+    // let output = LASOutput::new(
+    //     "doc_buildings.las",
+    //     &point_layout_from_las_point_format(&Format::new(6)?, false)?,
+    // )?;
     // let output = StdoutOutput::new(
     //     point_layout_from_las_point_format(&Format::new(6)?, true)?,
     //     // [
@@ -173,9 +173,8 @@ fn main() -> Result<()> {
     // let output = NullOutput::default();
 
     let query = get_query();
-    eprintln!("Query: {shapefile_query}");
-    let stats =
-        progressive_index.query(dataset_id, shapefile_query, &NoRefinementStrategy, &output)?;
+    eprintln!("Query: {query}");
+    let stats = progressive_index.query(dataset_id, query, &NoRefinementStrategy, &output)?;
 
     eprintln!("{}", stats);
 

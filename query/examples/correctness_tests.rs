@@ -334,10 +334,10 @@ fn test_queries_doc(shapefile_path: &Path) -> Vec<QueryExpression> {
         Box::new(class_buildings.clone()),
         Box::new(first_returns.clone()),
     );
-    let time_range_or_bounds = QueryExpression::Or(
-        Box::new(gps_time_range.clone()),
-        Box::new(aabb_large.clone()),
-    );
+    // let time_range_or_bounds = QueryExpression::Or(
+    //     Box::new(gps_time_range.clone()),
+    //     Box::new(aabb_large.clone()),
+    // );
 
     vec![
         aabb_large,
@@ -350,7 +350,7 @@ fn test_queries_doc(shapefile_path: &Path) -> Vec<QueryExpression> {
         polygon_small,
         gps_time_range,
         buildings_and_first_returns,
-        time_range_or_bounds,
+        // time_range_or_bounds,
     ]
 }
 

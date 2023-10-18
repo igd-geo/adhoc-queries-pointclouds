@@ -372,8 +372,8 @@ impl ProgressiveIndex {
                                     matching_points.fetch_add(num_matches, Ordering::SeqCst);
                                 }
                                 _ => panic!(
-                        "get_matching_blocks should not return a block with IndexResult::NoMatch"
-                    ),
+                                    "get_matching_blocks should not return a block with IndexResult::NoMatch"
+                                ),
                             }
                             Ok(())
                         },

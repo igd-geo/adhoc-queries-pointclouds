@@ -605,10 +605,11 @@ impl QueryExpression {
                 let right_blocks = r_expr.eval(indices);
                 combine_query_results(left_blocks, right_blocks, CombineQueryResultsOperator::And)
             }
-            QueryExpression::Or(l_expr, r_expr) => {
-                let left_blocks = l_expr.eval(indices);
-                let right_blocks = r_expr.eval(indices);
-                combine_query_results(left_blocks, right_blocks, CombineQueryResultsOperator::Or)
+            QueryExpression::Or(_l_expr, _r_expr) => {
+                panic!("currently broken due to bug in combine_query_results (it combines blocks but should keep them separate)");
+                // let left_blocks = l_expr.eval(indices);
+                // let right_blocks = r_expr.eval(indices);
+                // combine_query_results(left_blocks, right_blocks, CombineQueryResultsOperator::Or)
             }
         }
     }
