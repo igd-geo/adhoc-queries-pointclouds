@@ -122,8 +122,9 @@ fn merge_files(input: Vec<PathBuf>, args: &Args) -> Result<()> {
     let log_thread_handle = std::thread::spawn(move || {
         while !done.load(Ordering::SeqCst) {
             eprintln!(
-                "Read: {:5.3}/{total_point_count}  Write: {:5.3}",
+                "Read: {:5.3}/{}  Write: {:5.3}",
                 read_count.load(Ordering::SeqCst).human_count_bare(),
+                total_point_count.human_count_bare(),
                 write_count.load(Ordering::SeqCst).human_count_bare()
             );
             std::thread::sleep(Duration::from_secs(5));

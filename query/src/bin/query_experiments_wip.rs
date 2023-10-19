@@ -319,7 +319,8 @@ fn get_files_with_extension<P: AsRef<Path>>(extension: &str, path: P) -> Vec<Pat
         .into_iter()
         .filter_map(|entry| {
             entry.ok().and_then(|entry| {
-                if entry.path().extension().and_then(OsStr::to_str) == Some(extension) {
+                let extension_lower = entry.path().extension().and_then(OsStr::to_str).map(|s| s.to_ascii_lowercase());
+                if extension_lower.as_ref().map(|s| s.as_str()) == Some(extension) {
                     Some(entry.path().to_owned())
                 } else {
                     None

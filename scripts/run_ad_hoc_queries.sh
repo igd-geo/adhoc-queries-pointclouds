@@ -19,5 +19,5 @@ export RUST_LOG=info
 
 cd "${0%/*}" && cd ..
 cargo build --release --bin query_experiments_wip
-# args: data path (experiment data root), shapefile path (single shapefile containing all query shapes)
-sudo -E ./target/release/query_experiments_wip doc $1 $2 > /dev/null
+# args: dataset (doc, ca13, ahn4s), data path (experiment data root), shapefile path (single shapefile containing all query shapes)
+sudo -E ./target/release/query_experiments_wip $1 $2 $3 > /dev/null
