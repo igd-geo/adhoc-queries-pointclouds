@@ -23,12 +23,12 @@ PC_PORT=14587
 PC_USER=postgres
 PC_PASSWORD=test123
 
-export PSQL_USER=$OPENSTACK_POSTGRES_USER
-export PSQL_PWD=$OPENSTACK_POSTGRES_PASSWORD
-export PSQL_HOST=$OPENSTACK_POSTGRES_HOST
-export PSQL_PORT=$OPENSTACK_POSTGRES_PORT
-export PSQL_DBNAME=$OPENSTACK_POSTGRES_DB
-export PSQL_DBSCHEMA=$OPENSTACK_POSTGRES_SCHEMA
+export PSQL_USER=$DOCKER_POSTGRES_USER
+export PSQL_PWD=$DOCKER_POSTGRES_PASSWORD
+export PSQL_HOST=$DOCKER_POSTGRES_HOST
+export PSQL_PORT=$DOCKER_POSTGRES_PORT
+export PSQL_DBNAME=$DOCKER_POSTGRES_DB
+export PSQL_DBSCHEMA=$DOCKER_POSTGRES_SCHEMA
 export PC_DBNAME=$PC_DBNAME
 export PC_HOST=$PC_HOST
 export PC_PORT=$PC_PORT
@@ -40,4 +40,6 @@ export RUST_LOG=info
 # run locally just to test that queries are correct
 # export EXAR_LOCAL=1
 
-cargo run --release --bin run_postgis_queries
+cd "${0%/*}" && cd ..
+cargo build --release --bin run_postgis_queries &&
+./target/release/run_postgis_queries $1

@@ -39,6 +39,9 @@ struct Args {
     dataset: Dataset,
     data_path: PathBuf,
     shapefiles_path: PathBuf,
+    /// Start from the run with the given number. Helpful if the experiment is running very long or crashes somewhere
+    /// in the middle, so we can start again from there :)
+    start_from_run: Option<usize>,
 }
 
 fn flush_disk_cache() -> Result<()> {
@@ -314,6 +317,92 @@ fn experiment_queries_ahn4s(args: &Args) -> Result<Vec<(Cow<'static, str>, Query
     ].into_iter()).collect())
 }
 
+fn experiment_queries_ca13(args: &Args) -> Result<Vec<(Cow<'static, str>, QueryExpression)>> {
+    // Full bounds: (715932.1900000001, 3889087.89, 91.27) (736910.93, 3909670.85, 693.5500000000001)
+    let bounds_full = QueryExpression::Atomic(
+        AtomicExpression::Within(
+            Value::Position(Position(Vector3::new(715932.19, 3889087.89, 91.27)))..Value::Position(
+                Position(Vector3::new(736910.93, 3909670.85, 693.55))
+            )
+        )
+    );
+    let bounds_large = QueryExpression::Atomic(
+        AtomicExpression::Within(
+            Value::Position(Position(Vector3::new(715932.19, 3889087.89, 91.27)))..Value::Position(
+                Position(Vector3::new(736910.93, 3905000.0, 693.55))
+            )
+        )
+    );
+    let bounds_small = QueryExpression::Atomic(
+        AtomicExpression::Within(
+            Value::Position(Position(Vector3::new(734000.0, 3889087.89, 100.0)))..Value::Position(
+                Position(Vector3::new(735000.00, 3905000.0, 200.0))
+            )
+        )
+    );
+    let bounds_none = QueryExpression::Atomic(
+        AtomicExpression::Within(
+            Value::Position(Position(Vector3::new(0.0, 0.0, 0.0)))..Value::Position(
+                Position(Vector3::new(0.0, 0.0, 0.0))
+            )
+        )
+    );
+
+    let shapefile_queries = parse_shapefile(&args.shapefiles_path).with_context(|| format!("Failed to parse shapefile {}", args.shapefiles_path.display()))?;
+
+    let class_buildings = QueryExpression::Atomic(AtomicExpression::Compare((
+        CompareExpression::Equals,
+        Value::Classification(Classification(6)),
+    )));
+
+    let small_polygon_query = shapefile_queries.iter().find(|(name, _)| name == "Polygon small").ok_or_else(|| anyhow!("Missing shape 'Polygon small"))?;
+    let buildings_in_small_polygon = QueryExpression::And(Box::new(small_polygon_query.1.clone()), Box::new(class_buildings.clone()));
+
+    let vegetation_classes = QueryExpression::Atomic(AtomicExpression::Within(
+        Value::Classification(Classification(3))..Value::Classification(Classification(6))
+    ));
+
+    let first_returns = QueryExpression::Atomic(AtomicExpression::Compare((
+        CompareExpression::Equals,
+        Value::ReturnNumber(ReturnNumber(1)),
+    )));
+
+    let canopies_estimate = QueryExpression::And(
+        Box::new(QueryExpression::Atomic(AtomicExpression::Compare(
+            (CompareExpression::GreaterThan,
+            Value::NumberOfReturns(NumberOfReturns(1))),
+        ))),
+        Box::new(first_returns.clone()),
+    );
+
+    let lod0 = QueryExpression::Atomic(
+        AtomicExpression::Compare(
+            (CompareExpression::Equals, Value::LOD(DiscreteLod(0))),
+        )
+    );
+
+    let lod3 = QueryExpression::Atomic(
+        AtomicExpression::Compare(
+            (CompareExpression::Equals, Value::LOD(DiscreteLod(3))),
+        )
+    );
+
+    Ok(shapefile_queries.into_iter().chain([
+        (Cow::Borrowed("AABB (full)"), bounds_full),
+        (Cow::Borrowed("AABB (large)"), bounds_large),
+        (Cow::Borrowed("AABB (small)"), bounds_small),
+        (Cow::Borrowed("AABB (none)"), bounds_none),
+        (Cow::Borrowed("Buildings"), class_buildings),
+        (Cow::Borrowed("Buildings in small polygon"), buildings_in_small_polygon),
+        (Cow::Borrowed("Vegetation"), vegetation_classes),
+        (Cow::Borrowed("First returns"), first_returns),
+        (Cow::Borrowed("Canopies estimate"), canopies_estimate),
+        (Cow::Borrowed("LOD0"), lod0),
+        (Cow::Borrowed("LOD3"), lod3),
+    ].into_iter()).collect())
+}
+
+
 fn get_files_with_extension<P: AsRef<Path>>(extension: &str, path: P) -> Vec<PathBuf> {
     walkdir::WalkDir::new(path)
         .into_iter()
@@ -392,6 +481,38 @@ fn get_ahn4s_config(args: &Args) -> Result<DatasetConfig> {
     Ok(DatasetConfig { dataset_name: "AHN4-S", queries, datasets, output_point_layouts, })
 }
 
+fn get_ca13_config(args: &Args) -> Result<DatasetConfig> {
+    let queries =
+    experiment_queries_ca13(&args).context("Failed to build queries for CA13 dataset")?;
+
+    let las_files = get_files_with_extension("las", &args.data_path.join("ca13/las"));
+    let last_files = get_files_with_extension("last", &args.data_path.join("ca13/last"));
+    let laz_files = get_files_with_extension("laz", &args.data_path.join("ca13/laz"));
+    let lazer_files = get_files_with_extension("lazer", &args.data_path.join("ca13/lazer"));
+
+    let datasets = vec![
+        ("LAS", las_files),
+        ("LAST", last_files),
+        ("LAZ", laz_files),
+        ("LAZER", lazer_files),
+    ];
+
+    // Instead of hardcoding the point formats, we get the default and native PointLayouts from the dataset
+    let metadata = LASReader::from_path(&datasets[0].1[0], false).context("Failed to open first file from CA13 dataset")?.las_metadata().clone();
+
+    let output_point_layouts = vec![
+        ("All (default)", point_layout_from_las_metadata(&metadata, false)?),
+        ("All (native)", point_layout_from_las_metadata(&metadata, true)?),
+        ("Positions", [POSITION_3D].into_iter().collect::<PointLayout>()),
+        ("Positions, classifications, intensities", [POSITION_3D, CLASSIFICATION, INTENSITY]
+            .into_iter()
+            .collect::<PointLayout>()),
+    ];
+
+    Ok(DatasetConfig { dataset_name: "CA13", queries, datasets, output_point_layouts, })
+}
+
+
 fn main() -> Result<()> {
     // dotenv::dotenv().context("Failed to initialize with .env file")?;
     pretty_env_logger::init();
@@ -408,7 +529,7 @@ fn main() -> Result<()> {
     let dataset_config = match args.dataset {
         Dataset::Doc => get_doc_config(&args)?,
         Dataset::AHN4S => get_ahn4s_config(&args)?,
-        _ => unimplemented!(),
+        Dataset::CA13 => get_ca13_config(&args)?,
     };
 
     let total_runs = dataset_config.total_runs() * 2; //x2 for flushing disk cache
@@ -420,6 +541,13 @@ fn main() -> Result<()> {
         for flush_disk_cache in [true, false] {
             for (query_label, query) in &dataset_config.queries {
                 for (layout_label, output_layout) in &dataset_config.output_point_layouts {
+                    current_run += 1;
+                    if let Some(first_run) = args.start_from_run {
+                        if current_run < first_run {
+                            continue;
+                        }
+                    }
+
                     let params = QueryParams {
                         files: files.clone(),
                         flush_disk_cache,
@@ -438,7 +566,6 @@ fn main() -> Result<()> {
                         ("Purge cache", GenericValue::Bool(flush_disk_cache)),
                     ]).context("Could not create experiment instance")?;
 
-                    current_run += 1;
                     experiment_instance.run(|run_context| {
                         let (query_stats, output_stats) = run_query(params, current_run, total_runs).context("Executing query failed")?;
                         

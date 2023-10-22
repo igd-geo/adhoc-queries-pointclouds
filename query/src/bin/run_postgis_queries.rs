@@ -1,6 +1,7 @@
-use std::time::Instant;
+use std::{fmt::Display, time::Instant};
 
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
+use clap::{Parser, ValueEnum};
 use exar::{
     experiment::{ExperimentInstance, ExperimentVersion},
     variable::GenericValue,
@@ -13,8 +14,48 @@ struct NamedQuery {
     query: String,
 }
 
-// const DOC_NUM_MPOINTS: f64 = 876.0;
-// const CA13_NUM_MPOINTS: f64 = 2608.0;
+#[derive(ValueEnum, Copy, Clone, Debug)]
+enum Dataset {
+    Doc,
+    CA13,
+    AHN4S,
+}
+
+impl Dataset {
+    fn table_name(&self) -> &'static str {
+        match self {
+            Dataset::Doc => "doc",
+            Dataset::CA13 => "ca13",
+            Dataset::AHN4S => "ahn4s",
+        }
+    }
+
+    fn queries(&self, output_format: &str) -> Vec<NamedQuery> {
+        match self {
+            Dataset::Doc => get_queries_doc_patches(output_format),
+            Dataset::AHN4S => get_queries_ahn4s_patches(output_format),
+            Dataset::CA13 => get_queries_ca13_patches(output_format),
+        }
+    }
+}
+
+impl Display for Dataset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Dataset::Doc => write!(f, "DoC"),
+            Dataset::CA13 => write!(f, "CA13"),
+            Dataset::AHN4S => write!(f, "AHN4S"),
+        }
+    }
+}
+
+#[derive(Parser)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    dataset: Dataset,
+    /// Name of a specific query to execute
+    query_name: Option<String>,
+}
 
 fn get_queries_doc_patches(output_format: &str) -> Vec<NamedQuery> {
     // For quickly testing we can include a limit string
@@ -196,12 +237,407 @@ fn get_queries_doc_patches(output_format: &str) -> Vec<NamedQuery> {
     ]
 }
 
+fn get_queries_ahn4s_patches(output_format: &str) -> Vec<NamedQuery> {
+    // For quickly testing we can include a limit string
+    const _LIMIT: &str = "LIMIT 1";
+    let limit_str = "";
+
+    let small_rect_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT pa AS patches 
+            FROM ahn4s
+            WHERE PC_Intersects(
+                ST_Transform((SELECT geom FROM ahn4s_shapes WHERE name='Rect small'), 4329),
+                pa
+            ) {limit_str}
+        ) AS subquery"
+    );
+    let small_polygon_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT pa AS patches 
+            FROM ahn4s
+            WHERE PC_Intersects(
+                ST_Transform((SELECT geom FROM ahn4s_shapes WHERE name='Polygon small'), 4329),
+                pa
+            ) {limit_str}
+        ) AS subquery"
+    );
+    let small_polygon_with_holes_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT pa AS patches 
+            FROM ahn4s 
+            WHERE PC_Intersects(
+                ST_Transform((SELECT geom FROM ahn4s_shapes WHERE name='Polygon holes'), 4329),
+                pa
+            ) {limit_str}
+        ) AS subquery"
+    );
+    let large_rect_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT pa AS patches 
+            FROM ahn4s 
+            WHERE PC_Intersects(
+                ST_Transform((SELECT geom FROM ahn4s_shapes WHERE name='Rect large'), 4329),
+                pa
+            ) {limit_str}
+        ) AS subquery"
+    );
+    let large_polygon_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT pa AS patches 
+            FROM ahn4s 
+            WHERE PC_Intersects(
+                ST_Transform((SELECT geom FROM ahn4s_shapes WHERE name='Polygon large'), 4329),
+                pa
+            ) {limit_str}
+        ) AS subquery"
+    );
+
+    let bounds_none_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT pa AS patches 
+            FROM ahn4s 
+            WHERE PC_Intersects(ST_MakeEnvelope(0, 0, 0, 0, 4329), pa) {limit_str}
+        ) AS subquery"
+    );
+    let bounds_small_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT pa AS patches 
+            FROM ahn4s 
+            WHERE PC_Intersects(ST_MakeEnvelope(122000, 481250, 122500, 482500, 4329), pa) {limit_str}
+        ) AS subquery"
+    );
+    let bounds_large_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT pa AS patches 
+            FROM ahn4s 
+            WHERE PC_Intersects(ST_MakeEnvelope(122000, 481250, 122500, 482500, 4329), pa) {limit_str}
+        ) AS subquery"
+    );
+    let bounds_all_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT pa AS patches 
+            FROM ahn4s 
+            WHERE PC_Intersects(ST_MakeEnvelope(120000, 481250, 125000, 487500, 4329), pa) {limit_str}
+        ) AS subquery"
+    );
+
+    let buildings_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT PC_FilterEquals(pa, 'Classification', 6) AS patches 
+            FROM ahn4s {limit_str}
+        ) AS subquery"
+    );
+    let buildings_in_small_polygon_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT PC_FilterEquals(pa, 'Classification', 6) AS patches 
+            WHERE PC_Intersects(
+                ST_Transform((SELECT geom FROM ahn4s_shapes WHERE name='Polygon small'), 4329),
+                pa
+            )
+            FROM ahn4s {limit_str}
+        ) AS subquery"
+    );
+    let vegetation_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT PC_FilterBetween(pa, 'Classification', 2, 6) AS patches 
+            FROM ahn4s {limit_str}
+        ) AS subquery"
+    );
+    let first_returns_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT PC_FilterEquals(pa, 'ReturnNumber', 1) AS patches 
+            FROM ahn4s {limit_str}
+        ) AS subquery"
+    );
+    let canopies_estimate = format!(
+        "SELECT {output_format}
+        FROM (
+            SELECT PC_FilterGreaterThan(PC_FilterEquals(pa, 'ReturnNumber', 1), 'NumberOfReturns', 1) AS patches 
+	        FROM ahn4s {limit_str}
+        ) AS subquery"
+    );
+
+    // LOD queries seem impossible with pgPointclouds...
+
+    vec![
+        NamedQuery {
+            name: "AABB small",
+            query: bounds_small_query,
+        },
+        NamedQuery {
+            name: "AABB large",
+            query: bounds_large_query,
+        },
+        NamedQuery {
+            name: "AABB full",
+            query: bounds_all_query,
+        },
+        NamedQuery {
+            name: "AABB none",
+            query: bounds_none_query,
+        },
+        NamedQuery {
+            name: "Rect small",
+            query: small_rect_query,
+        },
+        NamedQuery {
+            name: "Polygon small",
+            query: small_polygon_query,
+        },
+        NamedQuery {
+            name: "Rect large",
+            query: large_rect_query,
+        },
+        NamedQuery {
+            name: "Polygon large",
+            query: large_polygon_query,
+        },
+        NamedQuery {
+            name: "Polygon holes",
+            query: small_polygon_with_holes_query,
+        },
+        NamedQuery {
+            name: "Buildings",
+            query: buildings_query,
+        },
+        NamedQuery {
+            name: "Buildings in small polygon",
+            query: buildings_in_small_polygon_query,
+        },
+        NamedQuery {
+            name: "Vegetation",
+            query: vegetation_query,
+        },
+        NamedQuery {
+            name: "First return",
+            query: first_returns_query,
+        },
+        NamedQuery {
+            name: "Canopies estimate",
+            query: canopies_estimate,
+        },
+    ]
+}
+
+fn get_queries_ca13_patches(output_format: &str) -> Vec<NamedQuery> {
+    // For quickly testing we can include a limit string
+    const _LIMIT: &str = "LIMIT 1";
+    let limit_str = "";
+
+    let small_rect_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT pa AS patches 
+            FROM ca13s
+            WHERE PC_Intersects(
+                ST_Transform((SELECT geom FROM ca13s_shapes WHERE name='Rect small'), 4329),
+                pa
+            ) {limit_str}
+        ) AS subquery"
+    );
+    let small_polygon_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT pa AS patches 
+            FROM ca13s
+            WHERE PC_Intersects(
+                ST_Transform((SELECT geom FROM ca13s_shapes WHERE name='Polygon small'), 4329),
+                pa
+            ) {limit_str}
+        ) AS subquery"
+    );
+    let small_polygon_with_holes_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT pa AS patches 
+            FROM ca13s 
+            WHERE PC_Intersects(
+                ST_Transform((SELECT geom FROM ca13s_shapes WHERE name='Polygon holes'), 4329),
+                pa
+            ) {limit_str}
+        ) AS subquery"
+    );
+    let large_rect_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT pa AS patches 
+            FROM ca13s 
+            WHERE PC_Intersects(
+                ST_Transform((SELECT geom FROM ca13s_shapes WHERE name='Rect large'), 4329),
+                pa
+            ) {limit_str}
+        ) AS subquery"
+    );
+    let large_polygon_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT pa AS patches 
+            FROM ca13s 
+            WHERE PC_Intersects(
+                ST_Transform((SELECT geom FROM ca13s_shapes WHERE name='Polygon large'), 4329),
+                pa
+            ) {limit_str}
+        ) AS subquery"
+    );
+
+    let bounds_none_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT pa AS patches 
+            FROM ca13s 
+            WHERE PC_Intersects(ST_MakeEnvelope(0, 0, 0, 0, 4329), pa) {limit_str}
+        ) AS subquery"
+    );
+    let bounds_small_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT pa AS patches 
+            FROM ca13s 
+            WHERE PC_Intersects(ST_MakeEnvelope(734000.0, 3889087.89, 735000.00, 3905000.0, 4329), pa) {limit_str}
+        ) AS subquery"
+    );
+    let bounds_large_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT pa AS patches 
+            FROM ca13s 
+            WHERE PC_Intersects(ST_MakeEnvelope(715932.19, 3889087.89, 736910.93, 3905000.0, 4329), pa) {limit_str}
+        ) AS subquery"
+    );
+    let bounds_all_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT pa AS patches 
+            FROM ca13s 
+            WHERE PC_Intersects(ST_MakeEnvelope(715932.19, 3889087.89, 736910.93, 3909670.85, 4329), pa) {limit_str}
+        ) AS subquery"
+    );
+
+    let buildings_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT PC_FilterEquals(pa, 'Classification', 6) AS patches 
+            FROM ca13s {limit_str}
+        ) AS subquery"
+    );
+    let vegetation_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT PC_FilterBetween(pa, 'Classification', 2, 6) AS patches 
+            FROM ca13s {limit_str}
+        ) AS subquery"
+    );
+    let first_returns_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT PC_FilterEquals(pa, 'ReturnNumber', 1) AS patches 
+            FROM ca13s {limit_str}
+        ) AS subquery"
+    );
+    let canopies_estimate = format!(
+        "SELECT {output_format}
+        FROM (
+            SELECT PC_FilterGreaterThan(PC_FilterEquals(pa, 'ReturnNumber', 1), 'NumberOfReturns', 1) AS patches 
+	        FROM ca13s {limit_str}
+        ) AS subquery"
+    );
+
+    // LOD queries seem impossible with pgPointclouds...
+
+    vec![
+        NamedQuery {
+            name: "AABB small",
+            query: bounds_small_query,
+        },
+        NamedQuery {
+            name: "AABB large",
+            query: bounds_large_query,
+        },
+        NamedQuery {
+            name: "AABB full",
+            query: bounds_all_query,
+        },
+        NamedQuery {
+            name: "AABB none",
+            query: bounds_none_query,
+        },
+        NamedQuery {
+            name: "Rect small",
+            query: small_rect_query,
+        },
+        NamedQuery {
+            name: "Polygon small",
+            query: small_polygon_query,
+        },
+        NamedQuery {
+            name: "Rect large",
+            query: large_rect_query,
+        },
+        NamedQuery {
+            name: "Polygon large",
+            query: large_polygon_query,
+        },
+        NamedQuery {
+            name: "Polygon holes",
+            query: small_polygon_with_holes_query,
+        },
+        NamedQuery {
+            name: "Buildings",
+            query: buildings_query,
+        },
+        NamedQuery {
+            name: "Vegetation",
+            query: vegetation_query,
+        },
+        NamedQuery {
+            name: "First return",
+            query: first_returns_query,
+        },
+        NamedQuery {
+            name: "Canopies estimate",
+            query: canopies_estimate,
+        },
+    ]
+}
+
 fn connect_to_db(config: &Config) -> Result<Client> {
     let client = config.connect(NoTls).context(format!(
         "Could not connect to postgres DB with config {:?}",
         config
     ))?;
     Ok(client)
+}
+
+fn assure_index_exists(tablename: &str, client: &mut Client) -> Result<()> {
+    let rows = client.query(
+        "SELECT indexdef
+                FROM pg_indexes
+                WHERE schemaname = 'public' AND tablename = $1",
+        &[&tablename],
+    )?;
+    // Looking for a gist index using the envelope geometries of the patches
+    let has_index = rows.iter().any(|row| {
+        let index_definition: &str = row.get(0);
+        index_definition.contains("USING gist (pc_envelopegeometry(pa))")
+    });
+    if !has_index {
+        bail!("Missing spatial index on table {tablename}");
+    }
+    Ok(())
 }
 
 fn run_query(
@@ -272,8 +708,8 @@ fn run_query(
 
 fn main() -> Result<()> {
     pretty_env_logger::init();
-    // This assumes that there are three tables in the database named 'navvis', 'doc' and 'ca13' for the three tests
-    // datasets referenced in the paper
+
+    let args = Args::parse();
 
     let machine = std::env::var("MACHINE").context("To run experiments, please set the 'MACHINE' environment variable to the name of the machine that you are running this experiment on. This is required so that experiment data can be mapped to the actual machine that ran the experiment. This will typically be the name or system configuration of the computer that runs the experiment.")?;
 
@@ -291,12 +727,13 @@ fn main() -> Result<()> {
         .dbname(&std::env::var("PC_DBNAME").expect("Missing environment variable PC_DBNAME"));
 
     let mut client = connect_to_db(&postgis_config)?;
+    assure_index_exists(args.dataset.table_name(), &mut client)?;
 
     let output_formats = [
         ("Point counts", "SUM(PC_NumPoints(patches))"), 
         ("All (default)", "PC_Get(PC_Explode(patches))"),
         ("Positions", "(PC_Get(PC_Explode(patches), 'X'), PC_Get(PC_Explode(patches), 'Y'), PC_Get(PC_Explode(patches), 'Z'))"),
-        ("Positions, classifiations, intensites", "(PC_Get(PC_Explode(patches), 'X'), PC_Get(PC_Explode(patches), 'Y'), PC_Get(PC_Explode(patches), 'Z'), PC_Get(PC_Explode(patches), 'Classification'), PC_Get(PC_Explode(patches), 'Intensity'))"),
+        ("Positions, classifications, intensities", "(PC_Get(PC_Explode(patches), 'X'), PC_Get(PC_Explode(patches), 'Y'), PC_Get(PC_Explode(patches), 'Z'), PC_Get(PC_Explode(patches), 'Classification'), PC_Get(PC_Explode(patches), 'Intensity'))"),
     ];
 
     let experiment_description = include_str!("yaml/ad_hoc_queries.yaml");
@@ -304,10 +741,13 @@ fn main() -> Result<()> {
         .context("Could not get current version of experiment")?;
 
     for (output_format_label, output_format) in output_formats {
-        let doc_patches_queries = get_queries_doc_patches(output_format);
-        for query in &doc_patches_queries {
+        let mut queries = args.dataset.queries(output_format);
+        if let Some(query_name) = args.query_name.as_ref() {
+            queries.retain(|q| q.name == query_name);
+        }
+        for query in &queries {
             let experiment_instance = experiment.make_instance([
-                ("Dataset", GenericValue::String(format!("DoC"))),
+                ("Dataset", GenericValue::String(args.dataset.to_string())),
                 ("Machine", GenericValue::String(machine.clone())),
                 (
                     "System",
@@ -330,29 +770,6 @@ fn main() -> Result<()> {
             .with_context(|| format!("Query {} failed", query.name))?;
         }
     }
-
-    // let navvis_bounds = Bounds {
-    //     s: "'SRID=4329;POLYGON((0.0 0.0, 0.0 2.0, 2.0 2.0, 2.0 0.0, 0.0 0.0))'::geometry".into(),
-    //     l: "'SRID=4329;POLYGON((0.0 0.0, 0.0 20.0, 20.0 20.0, 20.0 0.0, 0.0 0.0))'::geometry".into(),
-    //     xl: "'SRID=4329;POLYGON((-23.108 -21.261, -23.108 27.123, 28.588 27.123, 28.588 -21.261, -23.108 -21.261))'::geometry".into(),
-    // };
-    // let doc_bounds = Bounds {
-    //     s: "'SRID=4329;POLYGON((390000 130000, 390000 140000, 390500 140000, 390500 130000, 390000 130000))'::geometry".into(),
-    //     l: "'SRID=4329;POLYGON((390000 130000, 390000 140000, 400000 140000, 400000 130000, 390000 130000))'::geometry".into(),
-    //     xl: "'SRID=4329;POLYGON((389400 124200, 389400 148200, 406200 148200, 406200 124200, 389400 124200))'::geometry".into(),
-    // };
-    // let ca13_bounds = Bounds {
-    //     s: "'SRID=4329;POLYGON((665000 3910000, 665000 3950000, 705000 3950000, 705000 3910000, 665000 3910000))'::geometry".into(),
-    //     l: "'SRID=4329;POLYGON((665000 3910000, 665000 3950000, 710000 3950000, 710000 3910000, 665000 3910000))'::geometry".into(),
-    //     xl: "'SRID=4329;POLYGON((643431.76 3883547.565, 643431.76 3977026.735, 736910.93 3977026.735, 736910.93 3883547.565, 643431.76 3883547.565))'::geometry".into(),
-    // };
-
-    // run_spatial_queries(&navvis_bounds, "navvis", NAVVIS_NUM_MPOINTS, &client).await?;
-    // run_spatial_queries(&doc_bounds, "doc", DOC_NUM_MPOINTS, &client).await?;
-    // run_spatial_queries(&ca13_bounds, "ca13", CA13_NUM_MPOINTS, &client).await?;
-
-    // run_class_queries("doc", DOC_NUM_MPOINTS, &client).await?;
-    // run_class_queries("ca13", CA13_NUM_MPOINTS, &client).await?;
 
     Ok(())
 }

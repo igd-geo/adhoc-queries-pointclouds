@@ -7,10 +7,11 @@ use pasture_core::{
 };
 use pasture_io::{
     base::{PointReader, SeekToPoint},
-    las::{
-        point_layout_from_las_metadata, point_layout_from_las_point_format, LASMetadata, LASReader,
+    las::{point_layout_from_las_metadata, LASMetadata, LASReader},
+    las_rs::{
+        raw::{self, Header},
+        Builder, Vlr,
     },
-    las_rs::{point::Format, raw::Header},
 };
 
 use crate::las_common::{get_default_las_converter, get_minimum_layout_for_las_conversion};
@@ -20,12 +21,25 @@ pub fn las_to_last<R: Read + Seek + Send>(
     mut las_reader: R,
     mut last_writer: Cursor<&mut [u8]>,
 ) -> Result<()> {
-    let header = Header::read_from(&mut las_reader).context("Failed to read LAS header")?;
-    if header.evlr.is_some() {
+    let raw_header = Header::read_from(&mut las_reader).context("Failed to read LAS header")?;
+    if raw_header.evlr.is_some() {
         bail!("Files with EVLRs are not supported currently");
     }
+    // Read all VLRs and build a non-raw header from them and the raw header
+    let header = {
+        let vlrs = (0..raw_header.number_of_variable_length_records)
+            .map(|_| -> Result<Vlr> {
+                let raw_vlr = raw::Vlr::read_from(&mut las_reader, false)?;
+                Ok(Vlr::new(raw_vlr))
+            })
+            .collect::<Result<Vec<_>>>()
+            .context("Failed to read VLRs")?;
+        let mut header_builder = Builder::new(raw_header.clone())?;
+        header_builder.vlrs = vlrs;
+        header_builder.into_header()?
+    };
 
-    let start_of_point_records = header.offset_to_point_data as usize;
+    let start_of_point_records = raw_header.offset_to_point_data as usize;
 
     // Copy all data before the point records into the LAST file
     {
@@ -39,16 +53,18 @@ pub fn las_to_last<R: Read + Seek + Send>(
             .context("Could not copy data prior to point records to LAST file")?;
     }
 
-    let raw_las_point_layout =
-        point_layout_from_las_point_format(&Format::new(header.point_data_record_format)?, true)?;
+    let las_metadata: LASMetadata = (&header)
+        .try_into()
+        .context("Can't get metadata information from LAS header")?;
+    let raw_las_point_layout = point_layout_from_las_metadata(&las_metadata, true)?;
 
     const CHUNK_SIZE: usize = 1 << 20;
     let mut chunk_buffer =
         vec![0; CHUNK_SIZE * raw_las_point_layout.size_of_point_entry() as usize];
-    let num_points = if let Some(large_file) = header.large_file.as_ref() {
+    let num_points = if let Some(large_file) = raw_header.large_file.as_ref() {
         large_file.number_of_point_records as usize
     } else {
-        header.number_of_point_records as usize
+        raw_header.number_of_point_records as usize
     };
 
     let num_chunks = (num_points + CHUNK_SIZE - 1) / CHUNK_SIZE;
