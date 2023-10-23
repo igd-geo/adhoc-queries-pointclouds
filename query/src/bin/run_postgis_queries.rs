@@ -157,6 +157,17 @@ fn get_queries_doc_patches(output_format: &str) -> Vec<NamedQuery> {
             FROM doc {limit_str}
         ) AS subquery"
     );
+    let buildings_in_small_polygon_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT PC_FilterEquals(pa, 'Classification', 6) AS patches 
+            FROM doc {limit_str}
+            WHERE PC_Intersects(
+                ST_Transform((SELECT geom FROM doc_shapes WHERE name='small_polygon'), 4329),
+                pa
+            )
+        ) AS subquery"
+    );
     let vegetation_query = format!(
         "SELECT {output_format} 
         FROM (
@@ -221,6 +232,10 @@ fn get_queries_doc_patches(output_format: &str) -> Vec<NamedQuery> {
         NamedQuery {
             name: "Buildings",
             query: buildings_query,
+        },
+        NamedQuery {
+            name: "Buildings in small polygon",
+            query: buildings_in_small_polygon_query,
         },
         NamedQuery {
             name: "Vegetation",
@@ -342,11 +357,11 @@ fn get_queries_ahn4s_patches(output_format: &str) -> Vec<NamedQuery> {
         "SELECT {output_format} 
         FROM (
             SELECT PC_FilterEquals(pa, 'Classification', 6) AS patches 
+            FROM ahn4s {limit_str}
             WHERE PC_Intersects(
                 ST_Transform((SELECT geom FROM ahn4s_shapes WHERE name='Polygon small'), 4329),
                 pa
             )
-            FROM ahn4s {limit_str}
         ) AS subquery"
     );
     let vegetation_query = format!(
