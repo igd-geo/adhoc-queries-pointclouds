@@ -460,10 +460,10 @@ fn get_ahn4s_config(args: &Args) -> Result<DatasetConfig> {
     let lazer_files = get_files_with_extension("lazer", &args.data_path.join("ahn4s/lazer"));
 
     let datasets = vec![
-        ("LAS", las_files),
+        // ("LAS", las_files),
         ("LAST", last_files),
-        ("LAZ", laz_files),
-        ("LAZER", lazer_files),
+        // ("LAZ", laz_files),
+        // ("LAZER", lazer_files),
     ];
 
     // Instead of hardcoding the point formats, we get the default and native PointLayouts from the dataset
