@@ -334,7 +334,7 @@ fn get_queries_ahn4s_patches(output_format: &str) -> Vec<NamedQuery> {
         FROM (
             SELECT pa AS patches 
             FROM ahn4s 
-            WHERE PC_Intersects(ST_MakeEnvelope(122000, 481250, 122500, 482500, 4329), pa) {limit_str}
+            WHERE PC_Intersects(ST_MakeEnvelope(122000, 481250, 124000, 487500, 4329), pa) {limit_str}
         ) AS subquery"
     );
     let bounds_all_query = format!(

@@ -1,11 +1,19 @@
 #!/bin/sh
 
 # config for the experiment database running locally in docker
-DOCKER_POSTGRES_USER=postgres
-DOCKER_POSTGRES_PASSWORD=2XWVhtvi
+# DOCKER_POSTGRES_USER=postgres
+# DOCKER_POSTGRES_PASSWORD=2XWVhtvi
+# DOCKER_POSTGRES_HOST=0.0.0.0
+# DOCKER_POSTGRES_PORT=16378
+# DOCKER_POSTGRES_DB=experiment_base
+# DOCKER_POSTGRES_SCHEMA=public
+
+# config for the experiment database running together with the pointcloud database. Seems like I set up to DBs...
+DOCKER_POSTGRES_DB=experiments
 DOCKER_POSTGRES_HOST=0.0.0.0
-DOCKER_POSTGRES_PORT=16378
-DOCKER_POSTGRES_DB=experiment_base
+DOCKER_POSTGRES_PORT=14587
+DOCKER_POSTGRES_USER=postgres
+DOCKER_POSTGRES_PASSWORD=test123
 DOCKER_POSTGRES_SCHEMA=public
 
 # config for the experiment database running on an OpenStack VM
