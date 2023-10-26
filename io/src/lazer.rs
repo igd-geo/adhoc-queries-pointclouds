@@ -237,6 +237,8 @@ pub struct LazerReader<R: Read + Seek> {
 
 impl<R: Read + Seek> LazerReader<R> {
     pub fn new(mut reader: R) -> Result<Self> {
+        let _span = tracy_client::span!("LazerReader::new");
+
         let raw_las_header =
             raw::Header::read_from(&mut reader).context("Failed to read LAS header")?;
 
@@ -397,7 +399,7 @@ impl<R: Read + Seek> LazerReader<R> {
             .ok_or(anyhow!("No current block exists"))?;
         let remaining = current_block.num_points - current_block.current_position_within_block;
         if num_points > remaining {
-            bail!("num_points exceeds remaining point count in current block");
+            bail!("num_points ({num_points}) exceeds remaining point count ({remaining}) in current block");
         }
 
         for (attribute, decoder) in self
@@ -433,7 +435,7 @@ impl<R: Read + Seek> LazerReader<R> {
     fn block_index_for_point(&self, point_index: usize) -> usize {
         assert!(point_index < self.raw_las_header.number_of_point_records as usize);
         self.block_headers
-            .partition_point(|(cumulative_count, _)| *cumulative_count < point_index)
+            .partition_point(|(cumulative_count, _)| *cumulative_count <= point_index) - 1
     }
 
     fn read_default_layout<'a, 'b, B: BorrowedMutBuffer<'a>>(
@@ -576,11 +578,12 @@ impl<R: Read + Seek> PointReader for LazerReader<R> {
 
             let target_layout = point_buffer.point_layout().clone();
 
-            let minimum_source_layout = if num_to_read == self.remaining_points() {
-                get_minimum_layout_for_las_conversion(&self.default_point_layout, &target_layout).context("Could not determine minimum PointLayout for parsing LAZER data into requested buffer layout")?
-            } else {
-                self.default_point_layout.clone()
-            };
+            let minimum_source_layout = 
+            // if num_to_read == self.remaining_points() {
+                get_minimum_layout_for_las_conversion(&self.default_point_layout, &target_layout).context("Could not determine minimum PointLayout for parsing LAZER data into requested buffer layout")?;
+            // } else {
+            //     self.default_point_layout.clone()
+            // };
 
             let converter = get_default_las_converter(
                 &minimum_source_layout,
@@ -637,6 +640,7 @@ impl<R: Read + Seek> SeekToPoint for LazerReader<R> {
         //     let relative_offset_within_block = position_from_start - index_of_first_point_in_block;
         //     current_block_info.current_position_within_block = relative_offset_within_block;
         // } else {
+
         self.begin_decode_block(block_index)
             .context("Failed to decode LAZER block")?;
         let index_of_first_point_in_block = self.block_headers[block_index].0;
@@ -876,15 +880,15 @@ impl<W: Write + Seek> LazerWriter<W> {
     }
 
     fn encode_custom_layout<'a, B: BorrowedBuffer<'a>>(&mut self, points: &'a B) -> Result<()> {
-        if self.raw_las_header.point_data_record_format >= 6 {
-            // Not supported because BufferLayoutConverter does not support transform functions that run
-            // on the source data, and extracting bit attributes for extended formats requires this
-            bail!("LAZER writing not supported for extended LAS point record formats (>= 6)");
-        }
-        let target_layout = points.point_layout();
+        // if self.raw_las_header.point_data_record_format >= 6 {
+        //     // Not supported because BufferLayoutConverter does not support transform functions that run
+        //     // on the source data, and extracting bit attributes for extended formats requires this
+        //     bail!("LAZER writing not supported for extended LAS point record formats (>= 6)");
+        // }
+        let source_layout = points.point_layout();
         let converter = get_default_las_converter(
+            source_layout,
             &self.default_point_layout,
-            target_layout,
             self.raw_las_header.clone(),
         )
         .context("Could not get buffer layout converter for target buffer")?;

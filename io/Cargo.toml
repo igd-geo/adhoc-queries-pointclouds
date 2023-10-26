@@ -21,4 +21,4 @@ pasture-io = { git = "https://github.com/Mortano/pasture.git", branch = "parse-e
 pasture-derive = { git = "https://github.com/Mortano/pasture.git", branch = "parse-extra-bytes" }
 log = "0.4.17"
 pretty_env_logger = "0.4.0"
-tracy-client = { version = "0.15.2", default-features = false, features = [] }
+tracy-client = { version = "0.15.2", default-features = false, features = ["enable", "system-tracing"] }

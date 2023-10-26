@@ -13,9 +13,10 @@ use std::{
     ops::Range,
     path::{Path, PathBuf},
     sync::{Arc, Mutex},
+    time::Duration,
 };
 
-use crate::index::{DatasetID, PointRange};
+use crate::index::{DatasetID, PointRange, ValueType};
 
 use super::{
     BorrowedLasPointData, LASPointDataReaderFile, LASPointDataReaderMmap, LASTPointDataReaderFile,
@@ -142,6 +143,12 @@ pub(crate) trait PointDataLoader: Send + Sync {
     fn has_positions_in_world_space(&self) -> bool;
     /// Does this `PointDataLoader` support returning borrowed data (e.g. using `mmap`)?
     fn supports_borrowed_data(&self) -> bool;
+    /// Estimate how long it takes to read the necessary point attributes of `value_type` for the given `point_range`
+    fn estimate_io_time_for_point_range(
+        &self,
+        point_range: &Range<usize>,
+        value_type: ValueType,
+    ) -> Result<Duration>;
 }
 
 /// Handles low-level data access and provides access to point data for the query layer
@@ -271,11 +278,31 @@ impl InputLayer {
         point_layout_from_las_metadata(metadata, true)
     }
 
+    /// Get an estimate for how long it will take the InputLayer to read data for the `value_type` of `point_range` from
+    /// the given dataset
+    pub fn estimate_io_time_for_point_range(
+        &self,
+        dataset_id: DatasetID,
+        point_range: &PointRange,
+        value_type: ValueType,
+    ) -> Result<Duration> {
+        let loader = self
+            .get_or_create_loader(FileHandle(dataset_id, point_range.file_index))
+            .with_context(|| {
+                format!(
+                    "Could not get PointDataLoader for file {} of dataset {}",
+                    point_range.file_index, dataset_id
+                )
+            })?;
+        loader.estimate_io_time_for_point_range(&point_range.points_in_file, value_type)
+    }
+
     pub fn set_max_ram_consumption(&mut self, max_bytes: usize) {
         self.max_ram_consumption = max_bytes;
     }
 
     fn get_or_create_loader(&self, file_handle: FileHandle) -> Result<Arc<dyn PointDataLoader>> {
+        let _span = tracy_client::span!("InputLayer::get_or_create_loader");
         let mut active_loaders = self
             .active_point_loaders
             .lock()
@@ -300,13 +327,18 @@ impl InputLayer {
     }
 
     fn make_loader_from_path(path: &Path) -> Result<Arc<dyn PointDataLoader>> {
+        let _span = tracy_client::span!("InputLayer::make_loader_from_path");
+
         let file_extension = path.extension().and_then(OsStr::to_str).ok_or(anyhow!(
             "Could not determine file extension of file {}",
             path.display()
         ))?;
 
         // `mmap` on macOS is very slow, so we only use it on other platforms
-        let use_mmap = std::env::consts::OS != "macos";
+        let use_mmap = std::env::consts::OS != "macos"
+            || std::env::var("FORCE_MMAP")
+                .map(|v| v == "1")
+                .unwrap_or(false);
 
         match file_extension {
             "las" | "LAS" => {
@@ -347,7 +379,7 @@ impl InputLayer {
         &self,
         loaders: &mut HashMap<FileHandle, Arc<dyn PointDataLoader>>,
     ) {
-        let _span = tracy_client::span!("evict_loaders");
+        let _span = tracy_client::span!("InputLayer::evict_loaders");
 
         let current_memory = loaders
             .values()

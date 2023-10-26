@@ -16,6 +16,7 @@
 //      3.5) Implement some refinement procedure that generates or improves the index for each block (this is TBD)
 
 use anyhow::{anyhow, bail, Context, Result};
+use human_repr::HumanCount;
 use itertools::Itertools;
 use log::info;
 use pasture_core::{
@@ -150,7 +151,23 @@ impl KnownDataset {
         // Group refinements by their index ValueType, then apply each set of refinements to each of the indices
         for (value_type, refinements) in refinements {
             if let Some(index) = self.indices.get_mut(&value_type) {
-                let actual_candidates = refinement_strategy.select_best_candidates(refinements);
+                let actual_candidates = refinement_strategy.select_best_candidates(
+                    refinements,
+                    value_type,
+                    dataset_id,
+                    input_layer,
+                );
+
+                let total_points_to_refine = actual_candidates
+                    .iter()
+                    .map(|block| block.points_in_file.len())
+                    .sum::<usize>();
+                info!(
+                    "Refining {} blocks with a total of {} points",
+                    actual_candidates.len(),
+                    total_points_to_refine.human_count_bare()
+                );
+
                 index
                     .apply_refinements(actual_candidates, value_type, input_layer, dataset_id)
                     .context(format!(
@@ -364,12 +381,14 @@ impl ProgressiveIndex {
                                         &runtime_tracker,
                                     )?;
 
-                                    data_output.output(
-                                        &self.input_layer,
-                                        dataset_id,
-                                        point_range,
-                                        matching_indices_within_this_block,
-                                    )?;
+                                    if num_matches > 0 {
+                                        data_output.output(
+                                            &self.input_layer,
+                                            dataset_id,
+                                            point_range,
+                                            matching_indices_within_this_block,
+                                        )?;
+                                    }
 
                                     partial_match_blocks.fetch_add(1, Ordering::SeqCst);
                                     total_points_queried.fetch_add(block_length, Ordering::SeqCst);

@@ -5,15 +5,16 @@ use divide_range::RangeDivisions;
 use geo::{coord, Intersects, Contains};
 use pasture_core::{
     math::AABB,
-    nalgebra::{Point3, Vector3}, layout::attributes::{CLASSIFICATION, POSITION_3D}, containers::BorrowedBuffer,
+    nalgebra::{Point3, Vector3}, layout::attributes::CLASSIFICATION, containers::BorrowedBuffer,
 };
+use pasture_io::{las_rs::Header, las::ATTRIBUTE_LOCAL_LAS_POSITION};
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
 
 // use crate::io::{open_reader, PointReader};
 
-use crate::io::InputLayer;
+use crate::{io::{InputLayer, FileHandle}, search::{to_global_integer_position, get_data_with_at_least_attribute}};
 
 use super::{AtomicExpression, CompareExpression, Index, IndexResult, Value, ValueType, Geometry, DatasetID};
 
@@ -61,6 +62,26 @@ impl PositionIndex {
             bounds = AABB::extend_with_point(&bounds, &position.into());
         }
         Self { bounds }
+    }
+
+    pub fn build_from_local_positions<I: Iterator<Item = Vector3<i32>>>(mut local_positions: I, las_header: &Header) -> Self {
+        let _span = tracy_client::span!("PositionIndex::build_from_local_positions");
+        tracy_client::plot!("PositionIndex::build point count", local_positions.size_hint().1.unwrap() as f64);
+
+        let first_position = local_positions
+            .next()
+            .expect("Can't build a PositionIndex from an empty range of positions!");
+
+        let mut local_bounds = AABB::from_min_max_unchecked(first_position.into(), first_position.into());
+        for position in local_positions {
+            local_bounds = AABB::extend_with_point(&local_bounds, &position.into());
+        }
+        let global_min = to_global_integer_position(&local_bounds.min().coords, las_header.transforms());
+        let global_max = to_global_integer_position(&local_bounds.max().coords, las_header.transforms());
+
+        Self {
+            bounds: AABB::from_min_max(global_min.into(), global_max.into())
+        }
     }
 
     fn within(&self, min_position: &Vector3<f64>, max_position: &Vector3<f64>) -> IndexResult {
@@ -376,6 +397,7 @@ impl Block {
         input_layer: &InputLayer,
         dataset_id: DatasetID,
     ) -> Result<Vec<Block>> {
+        let _span = tracy_client::span!("BlockIndex::refine");
         assert!(self.point_range.points_in_file.len() >= Self::MIN_BLOCK_SIZE, "RefinementStrategy must not select a Block for refinement which is already fully refined");
 
         // So either we have an index, in which case we split it up into smaller indices, or we don't, in which
@@ -399,9 +421,10 @@ impl Block {
 
         match value_type {
             ValueType::Classification => {
-                let classifications_layout = [CLASSIFICATION].into_iter().collect();
-                let point_data = input_layer.get_point_data_in_layout(dataset_id, self.point_range.clone(), &classifications_layout, false)
-                    .with_context(|| format!("Could not get classifications for point range {}", self.point_range))?;
+                // let classifications_layout = [CLASSIFICATION].into_iter().collect();
+                // let point_data = input_layer.get_point_data_in_layout(dataset_id, self.point_range.clone(), &classifications_layout, false)
+                //     .with_context(|| format!("Could not get classifications for point range {}", self.point_range))?;
+                let point_data = get_data_with_at_least_attribute(&CLASSIFICATION, input_layer, dataset_id, self.point_range.clone()).with_context(|| format!("Could not get positions for point range {}", self.point_range))?;
 
                 let start_index = self.point_range.points_in_file.start;
                 Ok(new_block_ranges
@@ -421,18 +444,21 @@ impl Block {
                     .collect())
             }
             ValueType::Position3D => {
-                let positions_layouts = [POSITION_3D].into_iter().collect();
-                let point_data = input_layer.get_point_data_in_layout(dataset_id, self.point_range.clone(), &positions_layouts, true)
-                    .with_context(|| format!("Could not get positions for point range {}", self.point_range))?;
+                // let positions_layouts = [ATTRIBUTE_LOCAL_LAS_POSITION].into_iter().collect();
+                // let point_data = input_layer.get_point_data_in_layout(dataset_id, self.point_range.clone(), &positions_layouts, false)
+                //     .with_context(|| format!("Could not get positions for point range {}", self.point_range))?;
+                let point_data = get_data_with_at_least_attribute(&ATTRIBUTE_LOCAL_LAS_POSITION, input_layer, dataset_id, self.point_range.clone()).with_context(|| format!("Could not get positions for point range {}", self.point_range))?;
+                let las_header = input_layer.get_las_metadata(FileHandle(dataset_id, self.point_range.file_index)).unwrap().raw_las_header().unwrap();
 
                 let start_index = self.point_range.points_in_file.start;
                 Ok(new_block_ranges
                     .map(|new_block_range| {
                         let local_range = (new_block_range.start - start_index)
                             ..(new_block_range.end - start_index);
-                        let positions = point_data.view_attribute::<Vector3<f64>>(&POSITION_3D).into_iter();
-                        let positions_index = PositionIndex::build_from_positions(
-                            positions.skip(local_range.start).take(local_range.len())
+                        let positions = point_data.view_attribute::<Vector3<i32>>(&ATTRIBUTE_LOCAL_LAS_POSITION).into_iter();
+                        let positions_index = PositionIndex::build_from_local_positions(
+                            positions.skip(local_range.start).take(local_range.len()),
+                            las_header,
                         );
                         Block::with_index(
                             new_block_range,
@@ -481,6 +507,8 @@ impl BlockIndex {
         input_layer: &InputLayer,
         dataset_id: DatasetID,
     ) -> Result<()> {
+        let _span = tracy_client::span!("BlockIndex::apply_refinements");
+
         // Create the refined blocks in parallel and memorize the index of the old block that they will replace
         let mut refined_blocks = blocks_to_refine.into_par_iter().map(|block| -> Result<(usize, Vec<Block>)> {
             let old_block_index = self.blocks.iter().position(|old_block| old_block.point_range == block).ok_or_else(|| anyhow!("No old block for point range {block} found"))?;

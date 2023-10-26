@@ -27,9 +27,7 @@ export RUST_LOG=info
 # whereas the file-based readers use locking. For single files, this is super slow of course, as it kills all parallelism
 # so sometimes it makes sense to force the usage of `mmap`
 # export FORCE_MMAP=1
-export EXAR_LOCAL=1
 
 cd "${0%/*}" && cd ..
-cargo build --release --bin query_experiments_wip
-# args: dataset (doc, ca13, ahn4s), data path (experiment data root), shapefile path (single shapefile containing all query shapes)
-sudo -E ./target/release/query_experiments_wip $1 $2 $3 > /dev/null
+cargo build --release --bin adaptive_indexing_experiment
+sudo -E ./target/release/adaptive_indexing_experiment > /dev/null

@@ -11,6 +11,7 @@ memmap = "0.7.0"
 rayon = "1.4.0"
 clap = { version = "4", features = ["derive"] }
 serde = { version = "1", features = ["derive"] }
+serde_json = "1.0"
 anyhow = { version = "1", features = ["backtrace"] }
 bincode = "1.3.1"
 byteorder = "1.3.4"
@@ -32,18 +33,21 @@ human-repr = "1"
 scopeguard = "1.1.0"
 typetag = "0.2"
 rand = "0.8.5"
-exar = { git = "https://github.com/Mortano/experiment-archiver-rs", branch = "rewrite", features = ["version-from-git"] }
+exar = { git = "https://github.com/Mortano/experiment-archiver-rs", branch = "rewrite", features = [] }
 bytemuck = {version = "1.13", features = ["derive"] }
 ouroboros = "0.17.2"
 geo = "0.26.0"
 shapefile = { version = "0.5.0", features = ["geo-types"] }
-tracy-client = { version = "0.15.2", default-features = false, features = [] }
+tracy-client = { version = "0.15.2", default-features = false, features = ["enable", "system-tracing"] }
 page_size = "0.6.0"
 memmap2 = "0.8.0"
 statrs = "0.16.0"
 tabled = "0.14"
 tokio = { version = "1", features = ["full"] }
 postgres = {version = "0.19" }
+dirs = "5.0"
+lazy_static = "1.4"
+thread_local = "1.1"
 
 [dev-dependencies]
 regex = "1"

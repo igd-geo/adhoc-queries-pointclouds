@@ -225,6 +225,9 @@ pub(crate) fn eval_impl<F: FnMut(U) -> Result<bool>, U: PrimitiveType>(
     point_data: impl Iterator<Item = U>,
     runtime_tracker: &BlockQueryRuntimeTracker,
 ) -> Result<usize> {
+    let _span = tracy_client::span!("eval_impl");
+    tracy_client::plot!("eval_points", block.points_in_file.len() as f64);
+
     let timer = Instant::now();
 
     let mut num_matches = 0;

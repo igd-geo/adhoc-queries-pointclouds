@@ -7,7 +7,8 @@ use anyhow::{anyhow, bail, Context, Result};
 use clap::{Parser, ValueEnum};
 use exar::{experiment::ExperimentVersion, variable::GenericValue};
 use geo::MultiPolygon;
-use log::info;
+use itertools::Itertools;
+use log::{info, warn};
 use pasture_core::{
     layout::{
         attributes::{CLASSIFICATION, INTENSITY, POSITION_3D},
@@ -74,7 +75,7 @@ fn flush_disk_cache() -> Result<()> {
 
 fn parse_shapefile<P: AsRef<Path>>(path: P) -> Result<Vec<(Cow<'static, str>, QueryExpression)>> {
     let mut reader = shapefile::Reader::from_path(path)?;
-    reader.iter_shapes_and_records().map(|shape_record| -> Result<(Cow<'static, str>, QueryExpression)> {
+    let queries = reader.iter_shapes_and_records().map(|shape_record| -> Result<Option<(Cow<'static, str>, QueryExpression)>> {
         let (shape, record) = shape_record?;
         let shape_name = match record.get("name").ok_or_else(|| anyhow!("Missing field 'name' in shape"))? {
             FieldValue::Character(text) => text.clone().unwrap_or_default(),
@@ -92,10 +93,14 @@ fn parse_shapefile<P: AsRef<Path>>(path: P) -> Result<Vec<(Cow<'static, str>, Qu
                 Geometry::Polygon(first_polygon),
             ))
             }
-            other => bail!("Invalid Shape, expected Polygon but got {other}"),
+            other => {
+                warn!("Unexpected shape {other} in shapefile, ignoring this shape");
+                return Ok(None);
+            },
         };
-        Ok((Cow::Owned(shape_name), query))
-    }).collect()
+        Ok(Some((Cow::Owned(shape_name), query)))
+    }).collect::<Result<Vec<_>>>()?;
+    Ok(queries.into_iter().filter_map(|e| e).collect_vec())
 }
 
 /// Configuration for a specific dataset (file paths, queries, output layouts)
@@ -139,7 +144,7 @@ fn run_query(params: QueryParams, run_number: usize, total_runs: usize,) -> Resu
         .context("Failed to add new dataset")?;
 
     let positions_in_world_space = params.target_layout.has_attribute(&POSITION_3D);
-    let stdout_output = StdoutOutput::new(params.target_layout, positions_in_world_space);
+    let stdout_output = StdoutOutput::new(params.target_layout, positions_in_world_space, false);
     let query_stats = index
         .query(
             dataset_id,
@@ -460,10 +465,10 @@ fn get_ahn4s_config(args: &Args) -> Result<DatasetConfig> {
     let lazer_files = get_files_with_extension("lazer", &args.data_path.join("ahn4s/lazer"));
 
     let datasets = vec![
-        // ("LAS", las_files),
+        ("LAS", las_files),
         ("LAST", last_files),
         // ("LAZ", laz_files),
-        // ("LAZER", lazer_files),
+        ("LAZER", lazer_files),
     ];
 
     // Instead of hardcoding the point formats, we get the default and native PointLayouts from the dataset
@@ -472,10 +477,10 @@ fn get_ahn4s_config(args: &Args) -> Result<DatasetConfig> {
     let output_point_layouts = vec![
         ("All (default)", point_layout_from_las_metadata(&metadata, false)?),
         ("All (native)", point_layout_from_las_metadata(&metadata, true)?),
-        ("Positions", [POSITION_3D].into_iter().collect::<PointLayout>()),
-        ("Positions, classifications, intensities", [POSITION_3D, CLASSIFICATION, INTENSITY]
-            .into_iter()
-            .collect::<PointLayout>()),
+        // ("Positions", [POSITION_3D].into_iter().collect::<PointLayout>()),
+        // ("Positions, classifications, intensities", [POSITION_3D, CLASSIFICATION, INTENSITY]
+        //     .into_iter()
+        //     .collect::<PointLayout>()),
     ];
 
     Ok(DatasetConfig { dataset_name: "AHN4-S", queries, datasets, output_point_layouts, })
@@ -516,6 +521,7 @@ fn get_ca13_config(args: &Args) -> Result<DatasetConfig> {
 fn main() -> Result<()> {
     // dotenv::dotenv().context("Failed to initialize with .env file")?;
     pretty_env_logger::init();
+    let _client = tracy_client::Client::start();
 
     let args = Args::parse();
 
@@ -565,7 +571,7 @@ fn main() -> Result<()> {
                         ("Output attributes", GenericValue::String(layout_label.to_string())),
                         ("Purge cache", GenericValue::Bool(flush_disk_cache)),
                     ]).context("Could not create experiment instance")?;
-
+ 
                     experiment_instance.run(|run_context| {
                         let (query_stats, output_stats) = run_query(params, current_run, total_runs).context("Executing query failed")?;
                         

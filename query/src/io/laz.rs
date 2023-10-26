@@ -1,7 +1,9 @@
 use std::{
     fs::File,
     io::{Cursor, Seek, SeekFrom},
+    ops::Range,
     path::Path,
+    time::Duration,
 };
 
 use anyhow::{anyhow, bail, Context, Result};
@@ -19,9 +21,9 @@ use pasture_io::{
     las_rs::Vlr,
 };
 
-use crate::io::PointData;
+use crate::{index::ValueType, io::PointData};
 
-use super::PointDataLoader;
+use super::{FileFormat, IOMethod, IOStats, IOStatsParameters, PointDataLoader};
 
 fn is_laszip_vlr(vlr: &Vlr) -> bool {
     vlr.user_id == laz::LazVlr::USER_ID && vlr.record_id == laz::LazVlr::RECORD_ID
@@ -176,5 +178,34 @@ impl PointDataLoader for LAZPointDataReader {
 
     fn supports_borrowed_data(&self) -> bool {
         false
+    }
+
+    fn estimate_io_time_for_point_range(
+        &self,
+        point_range: &Range<usize>,
+        _value_type: ValueType,
+    ) -> Result<Duration> {
+        let io_stats =
+            IOStats::global().ok_or_else(|| anyhow!("Could not get global I/O stats"))?;
+        let point_record_format = self
+            .las_metadata
+            .point_format()
+            .to_u8()
+            .context("Unsupported point record format")?;
+        let million_points_per_second = io_stats
+            .throughputs_mpts()
+            .get(&IOStatsParameters {
+                file_format: FileFormat::LAZ,
+                io_method: IOMethod::Mmap,
+                point_record_format,
+            })
+            .ok_or_else(|| {
+                anyhow!(
+                    "No statistics for point record format {point_record_format} of LAS file found"
+                )
+            })?;
+        let points_per_second = million_points_per_second * 1e6;
+        let expected_time_seconds = point_range.len() as f64 / points_per_second;
+        Ok(Duration::from_secs_f64(expected_time_seconds))
     }
 }

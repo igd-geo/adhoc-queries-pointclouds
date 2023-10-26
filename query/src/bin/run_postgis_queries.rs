@@ -745,10 +745,10 @@ fn main() -> Result<()> {
     assure_index_exists(args.dataset.table_name(), &mut client)?;
 
     let output_formats = [
-        ("Point counts", "SUM(PC_NumPoints(patches))"), 
+        ("Point counts", "SUM(PC_NumPoints(patches))"),
         ("All (default)", "PC_Get(PC_Explode(patches))"),
-        ("Positions", "(PC_Get(PC_Explode(patches), 'X'), PC_Get(PC_Explode(patches), 'Y'), PC_Get(PC_Explode(patches), 'Z'))"),
-        ("Positions, classifications, intensities", "(PC_Get(PC_Explode(patches), 'X'), PC_Get(PC_Explode(patches), 'Y'), PC_Get(PC_Explode(patches), 'Z'), PC_Get(PC_Explode(patches), 'Classification'), PC_Get(PC_Explode(patches), 'Intensity'))"),
+        // ("Positions", "(PC_Get(PC_Explode(patches), 'X'), PC_Get(PC_Explode(patches), 'Y'), PC_Get(PC_Explode(patches), 'Z'))"),
+        // ("Positions, classifications, intensities", "(PC_Get(PC_Explode(patches), 'X'), PC_Get(PC_Explode(patches), 'Y'), PC_Get(PC_Explode(patches), 'Z'), PC_Get(PC_Explode(patches), 'Classification'), PC_Get(PC_Explode(patches), 'Intensity'))"),
     ];
 
     let experiment_description = include_str!("yaml/ad_hoc_queries.yaml");

@@ -6,6 +6,7 @@ use std::{
         atomic::{AtomicUsize, Ordering},
         Mutex,
     },
+    time::Instant,
 };
 
 use anyhow::{Context, Result};
@@ -41,21 +42,54 @@ pub struct StdoutOutput {
     output_layout: PointLayout,
     positions_in_world_space: bool,
     bytes_output: AtomicUsize,
+    bytes_over_time: Option<Mutex<Vec<(Instant, usize)>>>,
     // TODO Support interleaved and columnar output formats
 }
 
 impl StdoutOutput {
-    pub fn new(output_layout: PointLayout, positions_in_world_space: bool) -> Self {
+    pub fn new(
+        output_layout: PointLayout,
+        positions_in_world_space: bool,
+        track_data_over_time: bool,
+    ) -> Self {
         Self {
             output_layout,
             positions_in_world_space,
             bytes_output: AtomicUsize::default(),
+            bytes_over_time: if track_data_over_time {
+                let initial_bytes = (Instant::now(), 0);
+                Some(Mutex::new(vec![initial_bytes]))
+            } else {
+                None
+            },
         }
     }
 
     /// Returns the total number of bytes that were written to `stdout`
     pub fn bytes_output(&self) -> usize {
         self.bytes_output.load(Ordering::SeqCst)
+    }
+
+    /// Returns a collection of values for how many bytes were written at a given point in time. Returns `None` if
+    /// `track_data_over_time` was passed to `StdoutOutput::new`
+    pub fn bytes_over_time(&self) -> Option<Vec<(Instant, usize)>> {
+        self.bytes_over_time
+            .as_ref()
+            .map(|b| b.lock().expect("Failed to lock").to_vec())
+    }
+
+    fn log_write(&self, added_bytes: usize) {
+        if let Some(bytes_at_timestamp) = self.bytes_over_time.as_ref() {
+            self.bytes_output.fetch_add(added_bytes, Ordering::SeqCst);
+            let current_bytes = self.bytes_output.load(Ordering::SeqCst);
+            let now = Instant::now();
+            bytes_at_timestamp
+                .lock()
+                .expect("Failed to lock")
+                .push((now, current_bytes));
+        } else {
+            self.bytes_output.fetch_add(added_bytes, Ordering::SeqCst);
+        }
     }
 }
 
@@ -118,8 +152,7 @@ impl PointOutput for StdoutOutput {
 
                 let mut stdout = std::io::stdout().lock();
                 stdout.write_all(&interleaved_buffer)?;
-                self.bytes_output
-                    .fetch_add(interleaved_buffer.len(), Ordering::SeqCst);
+                self.log_write(interleaved_buffer.len());
             }
             _ => {
                 let points_range = memory.get_point_range_ref(0..memory.len());
@@ -140,8 +173,7 @@ impl PointOutput for StdoutOutput {
 
                 let mut stdout = std::io::stdout().lock();
                 stdout.write_all(&filtered_memory)?;
-                self.bytes_output
-                    .fetch_add(filtered_memory.len(), Ordering::SeqCst);
+                self.log_write(filtered_memory.len());
             }
         }
 

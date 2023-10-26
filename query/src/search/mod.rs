@@ -1,20 +1,5 @@
 mod las;
 pub(crate) use self::las::*;
 
-// mod laz;
-// pub use self::laz::*;
-
-// mod last;
-// pub(crate) use self::last::*;
-
-// mod laser;
-// pub use self::laser::*;
-
-// mod lazer;
-// pub use self::lazer::*;
-
-// mod searcher;
-// pub use self::searcher::*;
-
 mod compiled_query;
 pub use self::compiled_query::*;

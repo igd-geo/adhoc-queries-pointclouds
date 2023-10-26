@@ -1,0 +1,35 @@
+name: Adaptive indexing
+description: "Runs repeated queries on the ad-hoc query engine with adaptive indexing enabled"
+researchers:
+- Pascal Bormann
+input_variables:
+- name: Dataset
+  description: The dataset used in this experiment
+  data_type: Label
+- name: Machine
+  description: The machine that the experiment is run on
+  data_type: Label
+- name: Query
+  description: The query that was executed
+  data_type: Label
+- name: Query iteration
+  description: Which iteration of the query is this?
+  data_type: Number
+- name: Refinement strategy
+  description: Which refinement strategy was used?
+  data_type: Label
+output_variables:
+- name: Query runtime
+  description: The runtime of the query (without index refinement)
+  data_type: 
+    unit: s
+- name: Refinement time
+  description: The runtime for index refinement
+  data_type: 
+    unit: s
+- name: Queried points count
+  description: The number of points that were inspected by the query
+  data_type: Number
+- name: Bytes over time
+  description: Timeseries for the number of bytes that were written at different points in time
+  data_type: Text

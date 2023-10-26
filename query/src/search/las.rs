@@ -46,6 +46,16 @@ pub(crate) fn to_local_integer_position(
     )
 }
 
+pub(crate) fn to_global_integer_position(
+    position_local: &Vector3<i32>,
+    las_transforms: &Vector<Transform>,
+) -> Vector3<f64> {
+    let global_x = (position_local.x as f64 * las_transforms.x.scale) + las_transforms.x.offset;
+    let global_y = (position_local.y as f64 * las_transforms.y.scale) + las_transforms.y.offset;
+    let global_z = (position_local.z as f64 * las_transforms.z.scale) + las_transforms.z.offset;
+    Vector3::new(global_x, global_y, global_z)
+}
+
 /// Calculates the world-space bounding box for the given range of points in the given file
 fn _get_bounds_of_point_range(
     file: &mut Cursor<&[u8]>,
@@ -141,7 +151,7 @@ fn number_of_returns_from_las_extended_flags(flags: u16) -> u8 {
 /// Returns data from the input layer for the given point range that contains at least the given `attribute`. The input layer
 /// might decide to return point data containing more attributes, if this is more efficient, for example because the underlying
 /// file might be mapped into memory as is the case for LAS files
-fn get_data_with_at_least_attribute(
+pub(crate) fn get_data_with_at_least_attribute(
     attribute: &PointAttributeDefinition,
     input_layer: &InputLayer,
     dataset_id: DatasetID,
@@ -162,6 +172,7 @@ fn get_data_with_at_least_attribute(
         attribute.clone()
     };
 
+    // TODO What did I do here? Why does this work? This doesn't even check if the borrowed data contains the attribute :(
     if input_layer.can_get_borrowed_point_data(dataset_id, block.clone())? {
         input_layer
             .get_point_data(dataset_id, block.clone())

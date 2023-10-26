@@ -1,4 +1,4 @@
-use anyhow::{bail, Context, Result};
+use anyhow::{anyhow, bail, Context, Result};
 use io::last::LASTReader;
 use pasture_core::{
     containers::{HashMapBuffer, OwningBuffer},
@@ -6,22 +6,26 @@ use pasture_core::{
 };
 use pasture_io::{
     base::{PointReader, SeekToPoint},
-    las::{point_layout_from_las_metadata, LASReader},
+    las::{point_layout_from_las_metadata, LASMetadata, LASReader},
 };
 use std::{
+    cell::RefCell,
     fs::File,
     io::{BufReader, Cursor, SeekFrom},
-    path::Path,
-    sync::Mutex,
+    ops::Range,
+    path::{Path, PathBuf},
+    time::Duration,
 };
+use thread_local::ThreadLocal;
 
-use crate::io::PointData;
+use crate::{index::ValueType, io::PointData};
 
-use super::PointDataLoader;
+use super::{FileFormat, IOMethod, IOStats, IOStatsParameters, PointDataLoader};
 
 pub(crate) struct LASTPointDataReaderMmap {
     mmap: memmap::Mmap,
     default_point_layout: PointLayout,
+    las_metadata: LASMetadata,
 }
 
 impl LASTPointDataReaderMmap {
@@ -49,6 +53,7 @@ impl LASTPointDataReaderMmap {
         Ok(Self {
             mmap,
             default_point_layout,
+            las_metadata,
         })
     }
 }
@@ -91,11 +96,44 @@ impl PointDataLoader for LASTPointDataReaderMmap {
         // TODO It could support borrowed data, as soon as we have an `ExternalMemoryColumnarBuffer` type in pasture
         false
     }
+
+    fn estimate_io_time_for_point_range(
+        &self,
+        point_range: &Range<usize>,
+        value_type: ValueType,
+    ) -> Result<Duration> {
+        let io_stats =
+            IOStats::global().ok_or_else(|| anyhow!("Could not get global I/O stats"))?;
+        let point_record_format = self
+            .las_metadata
+            .point_format()
+            .to_u8()
+            .context("Unsupported point format")?;
+        let million_points_per_second = io_stats.throughputs_mpts().get(&IOStatsParameters {
+            file_format: FileFormat::LAST,
+            io_method: IOMethod::Mmap,
+            point_record_format,
+        }).ok_or_else(|| anyhow!("No statistics for point record format {point_record_format} of mmapped LAST file found"))?;
+        let points_per_second = million_points_per_second * 1e6;
+        let bytes_in_point = self.default_point_layout.size_of_point_entry() as f64;
+        // Estimate a speedup factor by dividing the size of the attribute from the ValueType by the size of all attributes in a point
+        let value_type_percentage = match value_type {
+            ValueType::Classification => 1.0 / bytes_in_point,
+            ValueType::GpsTime => 8.0 / bytes_in_point,
+            ValueType::NumberOfReturns => 1.0 / bytes_in_point,
+            ValueType::Position3D => 12.0 / bytes_in_point,
+            ValueType::ReturnNumber => 1.0 / bytes_in_point,
+        };
+        let expected_time_seconds =
+            (point_range.len() as f64 / points_per_second) * value_type_percentage;
+        Ok(Duration::from_secs_f64(expected_time_seconds))
+    }
 }
 
 pub(crate) struct LASTPointDataReaderFile {
     default_point_layout: PointLayout,
-    last_reader: Mutex<LASTReader<BufReader<File>>>,
+    path: PathBuf,
+    last_reader: ThreadLocal<RefCell<LASTReader<BufReader<File>>>>,
 }
 
 impl LASTPointDataReaderFile {
@@ -108,7 +146,18 @@ impl LASTPointDataReaderFile {
 
         Ok(Self {
             default_point_layout,
-            last_reader: Mutex::new(reader),
+            path: path.to_path_buf(),
+            last_reader: Default::default(),
+        })
+    }
+
+    fn get_thread_local_reader(&self) -> Result<&RefCell<LASTReader<BufReader<File>>>> {
+        self.last_reader.get_or_try(|| {
+            let file = File::open(&self.path)
+                .with_context(|| format!("Failed to open LAST file {}", self.path.display()))?;
+            let reader = LASTReader::from_read(BufReader::new(file))
+                .context("Failed to create LAST reader")?;
+            Ok(RefCell::new(reader))
         })
     }
 }
@@ -125,12 +174,13 @@ impl PointDataLoader for LASTPointDataReaderFile {
             bail!("If positions_in_world_space is set, the target PointLayout must have the default POSITION_3D attribute");
         }
 
-        let mut last_reader = self.last_reader.lock().expect("Lock was poisoned");
-        last_reader.seek_point(SeekFrom::Start(point_range.start as u64))?;
+        let last_reader = self.get_thread_local_reader()?;
+        let mut last_reader_mut = last_reader.borrow_mut();
+        last_reader_mut.seek_point(SeekFrom::Start(point_range.start as u64))?;
 
         let mut buffer = HashMapBuffer::with_capacity(point_range.len(), target_layout.clone());
         buffer.resize(point_range.len());
-        last_reader.read_into(&mut buffer, point_range.len())?;
+        last_reader_mut.read_into(&mut buffer, point_range.len())?;
         Ok(PointData::OwnedColumnar(buffer))
     }
 
@@ -148,5 +198,39 @@ impl PointDataLoader for LASTPointDataReaderFile {
 
     fn supports_borrowed_data(&self) -> bool {
         false
+    }
+
+    fn estimate_io_time_for_point_range(
+        &self,
+        point_range: &Range<usize>,
+        value_type: crate::index::ValueType,
+    ) -> Result<std::time::Duration> {
+        let io_stats =
+            IOStats::global().ok_or_else(|| anyhow!("Could not get global I/O stats"))?;
+        let last_reader = self.get_thread_local_reader()?;
+        let point_record_format = last_reader
+            .borrow()
+            .las_metadata()
+            .point_format()
+            .to_u8()
+            .context("Unsupported point format")?;
+        let million_points_per_second = io_stats.throughputs_mpts().get(&IOStatsParameters {
+            file_format: FileFormat::LAST,
+            io_method: IOMethod::File,
+            point_record_format,
+        }).ok_or_else(|| anyhow!("No statistics for point record format {point_record_format} of LAST file found"))?;
+        let points_per_second = million_points_per_second * 1e6;
+        let bytes_in_point = self.default_point_layout.size_of_point_entry() as f64;
+        // Estimate a speedup factor by dividing the size of the attribute from the ValueType by the size of all attributes in a point
+        let value_type_percentage = match value_type {
+            ValueType::Classification => 1.0 / bytes_in_point,
+            ValueType::GpsTime => 8.0 / bytes_in_point,
+            ValueType::NumberOfReturns => 1.0 / bytes_in_point,
+            ValueType::Position3D => 12.0 / bytes_in_point,
+            ValueType::ReturnNumber => 1.0 / bytes_in_point,
+        };
+        let expected_time_seconds =
+            (point_range.len() as f64 / points_per_second) * value_type_percentage;
+        Ok(Duration::from_secs_f64(expected_time_seconds))
     }
 }

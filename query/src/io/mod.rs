@@ -24,6 +24,9 @@ pub use self::input_layer::*;
 mod output_layer;
 pub use self::output_layer::*;
 
+mod stats;
+pub use self::stats::*;
+
 /// Returns all point cloud files in `dir`. A point cloud file is anything with the extensions "las",
 /// "laz", "last", or "lazer"
 pub fn get_point_files_in_path(dir: &Path) -> Vec<PathBuf> {

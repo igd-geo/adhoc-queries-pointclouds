@@ -22,6 +22,9 @@ impl RefinementStrategy for RefinementStrategyAlways {
     fn select_best_candidates(
         &self,
         potential_refinements: rustc_hash::FxHashSet<query::index::PointRange>,
+        value_type: ValueType,
+        dataset_id: query::index::DatasetID,
+        input_layer: &query::io::InputLayer,
     ) -> Vec<query::index::PointRange> {
         potential_refinements.into_iter().collect()
     }

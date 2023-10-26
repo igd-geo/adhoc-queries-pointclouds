@@ -16,11 +16,19 @@ use pasture_io::{
     las::{point_layout_from_las_metadata, LASMetadata, LASReader, ATTRIBUTE_LOCAL_LAS_POSITION},
 };
 use std::{
+    cell::RefCell,
     fs::File,
     io::{BufReader, Cursor, SeekFrom},
     ops::Range,
-    path::Path,
-    sync::{Arc, Mutex},
+    path::{Path, PathBuf},
+    sync::Arc,
+    time::Duration,
+};
+use thread_local::ThreadLocal;
+
+use crate::{
+    index::ValueType,
+    io::{FileFormat, IOMethod, IOStats, IOStatsParameters},
 };
 
 use super::{PointData, PointDataLoader};
@@ -110,7 +118,7 @@ impl PointDataLoader for LASPointDataReaderMmap {
         target_layout: &PointLayout,
         positions_in_world_space: bool,
     ) -> Result<PointData> {
-        let _span = tracy_client::span!("LAS::get_point_data");
+        let _span = tracy_client::span!("LASPointDataReaderMmap::get_point_data");
 
         let source_layout = self.mapped_file.point_layout();
         if target_layout == source_layout && !positions_in_world_space {
@@ -174,6 +182,30 @@ impl PointDataLoader for LASPointDataReaderMmap {
     fn supports_borrowed_data(&self) -> bool {
         true
     }
+
+    fn estimate_io_time_for_point_range(
+        &self,
+        point_range: &Range<usize>,
+        _value_type: ValueType,
+    ) -> Result<Duration> {
+        // ValueType is irrelevant, this is LAS, we don't get a big speedup from reading less data
+        let io_stats =
+            IOStats::global().ok_or_else(|| anyhow!("Could not get global I/O stats"))?;
+        let point_record_format = self
+            .mapped_file
+            .borrow_metadata()
+            .point_format()
+            .to_u8()
+            .context("Unsupported point format")?;
+        let million_points_per_second = io_stats.throughputs_mpts().get(&IOStatsParameters {
+            file_format: FileFormat::LAS,
+            io_method: IOMethod::Mmap,
+            point_record_format,
+        }).ok_or_else(|| anyhow!("No statistics for point record format {point_record_format} of mmapped LAS file found"))?;
+        let points_per_second = million_points_per_second * 1e6;
+        let expected_time_seconds = point_range.len() as f64 / points_per_second;
+        Ok(Duration::from_secs_f64(expected_time_seconds))
+    }
 }
 
 #[self_referencing]
@@ -203,7 +235,8 @@ impl BorrowedLasPointData {
 pub(crate) struct LASPointDataReaderFile {
     metadata: LASMetadata,
     default_point_layout: PointLayout,
-    las_reader: Mutex<LASReader<'static, BufReader<File>>>,
+    path: PathBuf,
+    las_reader: ThreadLocal<RefCell<LASReader<'static, BufReader<File>>>>,
 }
 
 impl LASPointDataReaderFile {
@@ -213,7 +246,19 @@ impl LASPointDataReaderFile {
         Ok(Self {
             metadata,
             default_point_layout: las_reader.get_default_point_layout().clone(),
-            las_reader: Mutex::new(las_reader),
+            path: path.to_path_buf(),
+            las_reader: Default::default(),
+            // las_reader: Mutex::new(las_reader),
+        })
+    }
+
+    fn get_thread_local_reader(&self) -> Result<&RefCell<LASReader<'static, BufReader<File>>>> {
+        let _span = tracy_client::span!("LASPointDataReaderFile::get_thread_local_reader");
+        self.las_reader.get_or_try(|| {
+            let reader = LASReader::from_path(&self.path, true).with_context(|| {
+                format!("Failed to open reader to LAS file {}", self.path.display())
+            })?;
+            Ok(RefCell::new(reader))
         })
     }
 }
@@ -225,19 +270,24 @@ impl PointDataLoader for LASPointDataReaderFile {
         target_layout: &PointLayout,
         positions_in_world_space: bool,
     ) -> Result<PointData> {
-        let _span = tracy_client::span!("LAS::get_point_data");
+        let _span = tracy_client::span!("LASPointDataReaderFile::get_point_data");
 
         let points = {
-            let mut reader = self.las_reader.lock().expect("Lock was poisoned");
-            reader.seek_point(SeekFrom::Start(point_range.start as u64))?;
-            reader.read::<VectorBuffer>(point_range.len())?
+            let reader = self.get_thread_local_reader()?;
+            let mut reader_mut = reader.borrow_mut();
+            {
+                let _span = tracy_client::span!("LASPointDataReaderFile::seek_point");
+                reader_mut.seek_point(SeekFrom::Start(point_range.start as u64))?;
+            }
+            reader_mut.read::<VectorBuffer>(point_range.len())?
         };
 
         let source_layout = &self.default_point_layout;
         if target_layout == source_layout && !positions_in_world_space {
             Ok(PointData::OwnedInterleaved(points))
         } else {
-            let _span = tracy_client::span!("LAS::get_point_data_with_conversion");
+            let _span =
+                tracy_client::span!("LASPointDataReaderFile::get_point_data_with_conversion");
             // Read the points in target layout!
             let mut converter =
                 BufferLayoutConverter::for_layouts_with_default(source_layout, target_layout);
@@ -290,5 +340,34 @@ impl PointDataLoader for LASPointDataReaderFile {
 
     fn supports_borrowed_data(&self) -> bool {
         false
+    }
+
+    fn estimate_io_time_for_point_range(
+        &self,
+        point_range: &Range<usize>,
+        _value_type: crate::index::ValueType,
+    ) -> Result<Duration> {
+        let io_stats =
+            IOStats::global().ok_or_else(|| anyhow!("Could not get global I/O stats"))?;
+        let point_record_format = self
+            .metadata
+            .point_format()
+            .to_u8()
+            .context("Unsupported point record format")?;
+        let million_points_per_second = io_stats
+            .throughputs_mpts()
+            .get(&IOStatsParameters {
+                file_format: FileFormat::LAS,
+                io_method: IOMethod::File,
+                point_record_format,
+            })
+            .ok_or_else(|| {
+                anyhow!(
+                    "No statistics for point record format {point_record_format} of LAS file found"
+                )
+            })?;
+        let points_per_second = million_points_per_second * 1e6;
+        let expected_time_seconds = point_range.len() as f64 / points_per_second;
+        Ok(Duration::from_secs_f64(expected_time_seconds))
     }
 }
