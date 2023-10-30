@@ -333,15 +333,15 @@ fn experiment_queries_ca13(args: &Args) -> Result<Vec<(Cow<'static, str>, QueryE
     );
     let bounds_large = QueryExpression::Atomic(
         AtomicExpression::Within(
-            Value::Position(Position(Vector3::new(715932.19, 3889087.89, 91.27)))..Value::Position(
-                Position(Vector3::new(736910.93, 3905000.0, 693.55))
+            Value::Position(Position(Vector3::new(732000.0, 3889087.89, 91.27)))..Value::Position(
+                Position(Vector3::new(736910.93, 3902000.0, 693.55))
             )
         )
     );
     let bounds_small = QueryExpression::Atomic(
         AtomicExpression::Within(
-            Value::Position(Position(Vector3::new(734000.0, 3889087.89, 100.0)))..Value::Position(
-                Position(Vector3::new(735000.00, 3905000.0, 200.0))
+            Value::Position(Position(Vector3::new(734750.0, 3891000.0, 0.0)))..Value::Position(
+                Position(Vector3::new(735000.00, 3900000.0, 700.0))
             )
         )
     );
@@ -436,7 +436,7 @@ fn get_doc_config(args: &Args) -> Result<DatasetConfig> {
     let doc_datasets = vec![
         ("LAS", las_files),
         ("LAST", last_files),
-        ("LAZ", laz_files),
+        // ("LAZ", laz_files),
         ("LAZER", lazer_files),
     ];
 
@@ -446,10 +446,10 @@ fn get_doc_config(args: &Args) -> Result<DatasetConfig> {
     let doc_output_point_layouts = vec![
         ("All (default)", point_layout_from_las_metadata(&doc_metadata, false)?),
         ("All (native)", point_layout_from_las_metadata(&doc_metadata, true)?),
-        ("Positions", [POSITION_3D].into_iter().collect::<PointLayout>()),
-        ("Positions, classifications, intensities", [POSITION_3D, CLASSIFICATION, INTENSITY]
-            .into_iter()
-            .collect::<PointLayout>()),
+        // ("Positions", [POSITION_3D].into_iter().collect::<PointLayout>()),
+        // ("Positions, classifications, intensities", [POSITION_3D, CLASSIFICATION, INTENSITY]
+        //     .into_iter()
+        //     .collect::<PointLayout>()),
     ];
 
     Ok(DatasetConfig { dataset_name: "doc", queries: doc_queries, datasets: doc_datasets, output_point_layouts: doc_output_point_layouts })

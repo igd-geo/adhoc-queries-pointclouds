@@ -1,7 +1,7 @@
 use anyhow::{anyhow, bail, Context, Result};
 use io::last::LASTReader;
 use pasture_core::{
-    containers::{HashMapBuffer, OwningBuffer},
+    containers::{HashMapBuffer, OwningBuffer, VectorBuffer},
     layout::{attributes::POSITION_3D, PointLayout},
 };
 use pasture_io::{
@@ -20,7 +20,9 @@ use thread_local::ThreadLocal;
 
 use crate::{index::ValueType, io::PointData};
 
-use super::{FileFormat, IOMethod, IOStats, IOStatsParameters, PointDataLoader};
+use super::{
+    FileFormat, IOMethod, IOStats, IOStatsParameters, PointDataLoader, PointDataMemoryLayout,
+};
 
 pub(crate) struct LASTPointDataReaderMmap {
     mmap: memmap::Mmap,
@@ -64,6 +66,7 @@ impl PointDataLoader for LASTPointDataReaderMmap {
         point_range: std::ops::Range<usize>,
         target_layout: &pasture_core::layout::PointLayout,
         positions_in_world_space: bool,
+        desired_memory_layout: PointDataMemoryLayout,
     ) -> Result<PointData> {
         let _span = tracy_client::span!("LAST::get_point_data");
         if positions_in_world_space && !target_layout.has_attribute(&POSITION_3D) {
@@ -73,11 +76,22 @@ impl PointDataLoader for LASTPointDataReaderMmap {
         let mut last_reader = LASTReader::from_read(Cursor::new(&self.mmap[..]))?;
         last_reader.seek_point(SeekFrom::Start(point_range.start as u64))?;
 
-        // TODO Support for borrowed columnar data
-        let mut buffer = HashMapBuffer::with_capacity(point_range.len(), target_layout.clone());
-        buffer.resize(point_range.len());
-        last_reader.read_into(&mut buffer, point_range.len())?;
-        Ok(PointData::OwnedColumnar(buffer))
+        match desired_memory_layout {
+            PointDataMemoryLayout::Interleaved => {
+                let mut buffer =
+                    VectorBuffer::with_capacity(point_range.len(), target_layout.clone());
+                buffer.resize(point_range.len());
+                last_reader.read_into(&mut buffer, point_range.len())?;
+                Ok(PointData::OwnedInterleaved(buffer))
+            }
+            PointDataMemoryLayout::Columnar => {
+                let mut buffer =
+                    HashMapBuffer::with_capacity(point_range.len(), target_layout.clone());
+                buffer.resize(point_range.len());
+                last_reader.read_into(&mut buffer, point_range.len())?;
+                Ok(PointData::OwnedColumnar(buffer))
+            }
+        }
     }
 
     fn mem_size(&self) -> usize {
@@ -128,6 +142,10 @@ impl PointDataLoader for LASTPointDataReaderMmap {
             (point_range.len() as f64 / points_per_second) * value_type_percentage;
         Ok(Duration::from_secs_f64(expected_time_seconds))
     }
+
+    fn preferred_memory_layout(&self) -> PointDataMemoryLayout {
+        PointDataMemoryLayout::Columnar
+    }
 }
 
 pub(crate) struct LASTPointDataReaderFile {
@@ -168,6 +186,7 @@ impl PointDataLoader for LASTPointDataReaderFile {
         point_range: std::ops::Range<usize>,
         target_layout: &PointLayout,
         positions_in_world_space: bool,
+        desired_memory_layout: PointDataMemoryLayout,
     ) -> Result<PointData> {
         let _span = tracy_client::span!("LAST::get_point_data");
         if positions_in_world_space && !target_layout.has_attribute(&POSITION_3D) {
@@ -178,10 +197,22 @@ impl PointDataLoader for LASTPointDataReaderFile {
         let mut last_reader_mut = last_reader.borrow_mut();
         last_reader_mut.seek_point(SeekFrom::Start(point_range.start as u64))?;
 
-        let mut buffer = HashMapBuffer::with_capacity(point_range.len(), target_layout.clone());
-        buffer.resize(point_range.len());
-        last_reader_mut.read_into(&mut buffer, point_range.len())?;
-        Ok(PointData::OwnedColumnar(buffer))
+        match desired_memory_layout {
+            PointDataMemoryLayout::Interleaved => {
+                let mut buffer =
+                    VectorBuffer::with_capacity(point_range.len(), target_layout.clone());
+                buffer.resize(point_range.len());
+                last_reader_mut.read_into(&mut buffer, point_range.len())?;
+                Ok(PointData::OwnedInterleaved(buffer))
+            }
+            PointDataMemoryLayout::Columnar => {
+                let mut buffer =
+                    HashMapBuffer::with_capacity(point_range.len(), target_layout.clone());
+                buffer.resize(point_range.len());
+                last_reader_mut.read_into(&mut buffer, point_range.len())?;
+                Ok(PointData::OwnedColumnar(buffer))
+            }
+        }
     }
 
     fn mem_size(&self) -> usize {
@@ -232,5 +263,9 @@ impl PointDataLoader for LASTPointDataReaderFile {
         let expected_time_seconds =
             (point_range.len() as f64 / points_per_second) * value_type_percentage;
         Ok(Duration::from_secs_f64(expected_time_seconds))
+    }
+
+    fn preferred_memory_layout(&self) -> PointDataMemoryLayout {
+        PointDataMemoryLayout::Columnar
     }
 }

@@ -3,7 +3,8 @@ use memmap::Mmap;
 use ouroboros::self_referencing;
 use pasture_core::{
     containers::{
-        BorrowedBuffer, BufferSliceInterleaved, ExternalMemoryBuffer, SliceBuffer, VectorBuffer,
+        BorrowedBuffer, BufferSliceInterleaved, ExternalMemoryBuffer, HashMapBuffer, SliceBuffer,
+        VectorBuffer,
     },
     layout::{
         attributes::POSITION_3D, conversion::BufferLayoutConverter, PointAttributeDataType,
@@ -31,7 +32,7 @@ use crate::{
     io::{FileFormat, IOMethod, IOStats, IOStatsParameters},
 };
 
-use super::{PointData, PointDataLoader};
+use super::{PointData, PointDataLoader, PointDataMemoryLayout};
 
 #[self_referencing]
 pub struct MappedLASFile {
@@ -117,11 +118,15 @@ impl PointDataLoader for LASPointDataReaderMmap {
         point_range: Range<usize>,
         target_layout: &PointLayout,
         positions_in_world_space: bool,
+        desired_memory_layout: PointDataMemoryLayout,
     ) -> Result<PointData> {
         let _span = tracy_client::span!("LASPointDataReaderMmap::get_point_data");
 
         let source_layout = self.mapped_file.point_layout();
-        if target_layout == source_layout && !positions_in_world_space {
+        if target_layout == source_layout
+            && !positions_in_world_space
+            && desired_memory_layout == PointDataMemoryLayout::Interleaved
+        {
             Ok(PointData::MmappedLas(
                 BorrowedLasPointData::from_file_and_range(self.mapped_file.clone(), point_range),
             ))
@@ -162,8 +167,16 @@ impl PointDataLoader for LASPointDataReaderMmap {
                 );
             }
             let source_slice = self.mapped_file.get_buffer_for_points(point_range);
-            let converted_points = converter.convert::<VectorBuffer, _>(&source_slice);
-            Ok(PointData::OwnedInterleaved(converted_points))
+            match desired_memory_layout {
+                PointDataMemoryLayout::Columnar => {
+                    let converted_points = converter.convert::<HashMapBuffer, _>(&source_slice);
+                    Ok(PointData::OwnedColumnar(converted_points))
+                }
+                PointDataMemoryLayout::Interleaved => {
+                    let converted_points = converter.convert::<VectorBuffer, _>(&source_slice);
+                    Ok(PointData::OwnedInterleaved(converted_points))
+                }
+            }
         }
     }
 
@@ -205,6 +218,10 @@ impl PointDataLoader for LASPointDataReaderMmap {
         let points_per_second = million_points_per_second * 1e6;
         let expected_time_seconds = point_range.len() as f64 / points_per_second;
         Ok(Duration::from_secs_f64(expected_time_seconds))
+    }
+
+    fn preferred_memory_layout(&self) -> PointDataMemoryLayout {
+        PointDataMemoryLayout::Interleaved
     }
 }
 
@@ -269,22 +286,23 @@ impl PointDataLoader for LASPointDataReaderFile {
         point_range: Range<usize>,
         target_layout: &PointLayout,
         positions_in_world_space: bool,
+        desired_memory_layout: PointDataMemoryLayout,
     ) -> Result<PointData> {
         let _span = tracy_client::span!("LASPointDataReaderFile::get_point_data");
 
-        let points = {
-            let reader = self.get_thread_local_reader()?;
-            let mut reader_mut = reader.borrow_mut();
-            {
-                let _span = tracy_client::span!("LASPointDataReaderFile::seek_point");
-                reader_mut.seek_point(SeekFrom::Start(point_range.start as u64))?;
-            }
-            reader_mut.read::<VectorBuffer>(point_range.len())?
-        };
-
         let source_layout = &self.default_point_layout;
         if target_layout == source_layout && !positions_in_world_space {
-            Ok(PointData::OwnedInterleaved(points))
+            let reader = self.get_thread_local_reader()?;
+            let mut reader_mut = reader.borrow_mut();
+            reader_mut.seek_point(SeekFrom::Start(point_range.start as u64))?;
+            match desired_memory_layout {
+                PointDataMemoryLayout::Columnar => Ok(PointData::OwnedColumnar(
+                    reader_mut.read::<HashMapBuffer>(point_range.len())?,
+                )),
+                PointDataMemoryLayout::Interleaved => Ok(PointData::OwnedInterleaved(
+                    reader_mut.read::<VectorBuffer>(point_range.len())?,
+                )),
+            }
         } else {
             let _span =
                 tracy_client::span!("LASPointDataReaderFile::get_point_data_with_conversion");
@@ -321,8 +339,22 @@ impl PointDataLoader for LASPointDataReaderFile {
                     false,
                 );
             }
-            let converted_points = converter.convert::<VectorBuffer, _>(&points);
-            Ok(PointData::OwnedInterleaved(converted_points))
+
+            let reader = self.get_thread_local_reader()?;
+            let mut reader_mut = reader.borrow_mut();
+            reader_mut.seek_point(SeekFrom::Start(point_range.start as u64))?;
+            let points = reader_mut.read::<VectorBuffer>(point_range.len())?;
+
+            match desired_memory_layout {
+                PointDataMemoryLayout::Columnar => {
+                    let converted_points = converter.convert::<HashMapBuffer, _>(&points);
+                    Ok(PointData::OwnedColumnar(converted_points))
+                }
+                PointDataMemoryLayout::Interleaved => {
+                    let converted_points = converter.convert::<VectorBuffer, _>(&points);
+                    Ok(PointData::OwnedInterleaved(converted_points))
+                }
+            }
         }
     }
 
@@ -369,5 +401,9 @@ impl PointDataLoader for LASPointDataReaderFile {
         let points_per_second = million_points_per_second * 1e6;
         let expected_time_seconds = point_range.len() as f64 / points_per_second;
         Ok(Duration::from_secs_f64(expected_time_seconds))
+    }
+
+    fn preferred_memory_layout(&self) -> PointDataMemoryLayout {
+        PointDataMemoryLayout::Interleaved
     }
 }

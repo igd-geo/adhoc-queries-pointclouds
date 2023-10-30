@@ -1,8 +1,9 @@
-use std::{fmt::Display, ops::Range, collections::HashMap};
+use std::{fmt::Display, ops::Range, collections::HashMap, path::Path};
 
 use anyhow::{anyhow, Result, Context};
 use divide_range::RangeDivisions;
 use geo::{coord, Intersects, Contains};
+use itertools::Itertools;
 use pasture_core::{
     math::AABB,
     nalgebra::{Point3, Vector3}, layout::attributes::CLASSIFICATION, containers::BorrowedBuffer,
@@ -11,6 +12,7 @@ use pasture_io::{las_rs::Header, las::ATTRIBUTE_LOCAL_LAS_POSITION};
 use rayon::prelude::{IntoParallelIterator, ParallelIterator};
 use rustc_hash::FxHashMap;
 use serde::{Deserialize, Serialize};
+use shapefile::{Shape, polygon, dbase::WritableRecord};
 
 // use crate::io::{open_reader, PointReader};
 
@@ -158,6 +160,13 @@ impl Index for PositionIndex {
     fn value_type(&self) -> ValueType {
         ValueType::Position3D
     }
+
+    fn shape(&self) -> Option<Shape> {
+        let min = self.bounds.min();
+        let max = self.bounds.max();
+        let poly = polygon!(Outer({x: min.x, y: min.y}, {x: max.x, y: min.y}, {x: max.x, y: max.y}, {x: min.x, y: max.y}));
+        Some(Shape::Polygon(poly))
+    }
 }
 
 /// Histogram-based index over classifications
@@ -277,6 +286,10 @@ impl Index for ClassificationIndex {
 
     fn value_type(&self) -> ValueType {
         ValueType::Classification
+    }
+
+    fn shape(&self) -> Option<Shape> {
+        None
     }
 }
 
@@ -410,6 +423,8 @@ impl Block {
         let num_splits = match self.point_range.points_in_file.len() / Self::MIN_BLOCK_SIZE {
             0..=1 => panic!("Should not refine block that is less than 2x the MIN_BLOCK_SIZE"),
             2..=3 => 2,
+            4 => 5, //Strange calculation, but we start with blocks of size 1M, then refine to 4x250k, THEN refine to 5x50k
+                    //which is the default block size of LAZ and LAZER
             _ => 4,
         };
 
@@ -528,6 +543,38 @@ impl BlockIndex {
             }
         }).flatten().collect();
     
+        Ok(())
+    }
+
+    pub(crate) fn dump_position_indices(&self, file: &Path) -> Result<()> {
+        let position_indices = self.blocks.iter().filter_map(|block| block.index.as_ref().and_then(|index| index.shape()));
+
+        let table_builder = shapefile::dbase::TableWriterBuilder::new()
+        .add_integer_field("index".try_into().unwrap());
+        let mut writer = shapefile::Writer::from_path(file, table_builder)?;
+
+        struct Record {
+            index: usize,
+        }
+
+        impl WritableRecord for Record {
+            fn write_using<'a, W: std::io::Write>(
+                &self,
+                field_writer: &mut shapefile::dbase::FieldWriter<'a, W>,
+            ) -> std::result::Result<(), shapefile::dbase::FieldIOError> {
+                field_writer.write_next_field_value(&(self.index as i32))
+            }
+        }
+
+        for (index, position_shape) in position_indices.enumerate() {
+            let record = Record { index, };
+            match position_shape {
+                Shape::Polygon(poly) => writer.write_shape_and_record(&poly, &record)?,
+                _ => (),
+            }
+            
+        }
+
         Ok(())
     }
 }

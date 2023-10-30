@@ -9,7 +9,9 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use laz::{LasZipDecompressor, LazVlr};
 use pasture_core::{
-    containers::{InterleavedBufferMut, MakeBufferFromLayout, OwningBuffer, VectorBuffer},
+    containers::{
+        HashMapBuffer, InterleavedBufferMut, MakeBufferFromLayout, OwningBuffer, VectorBuffer,
+    },
     layout::{
         attributes::POSITION_3D, conversion::BufferLayoutConverter, PointAttributeDataType,
         PointLayout,
@@ -23,7 +25,9 @@ use pasture_io::{
 
 use crate::{index::ValueType, io::PointData};
 
-use super::{FileFormat, IOMethod, IOStats, IOStatsParameters, PointDataLoader};
+use super::{
+    FileFormat, IOMethod, IOStats, IOStatsParameters, PointDataLoader, PointDataMemoryLayout,
+};
 
 fn is_laszip_vlr(vlr: &Vlr) -> bool {
     vlr.user_id == laz::LazVlr::USER_ID && vlr.record_id == laz::LazVlr::RECORD_ID
@@ -89,6 +93,7 @@ impl PointDataLoader for LAZPointDataReader {
         point_range: std::ops::Range<usize>,
         target_layout: &PointLayout,
         positions_in_world_space: bool,
+        desired_memory_layout: PointDataMemoryLayout,
     ) -> Result<super::PointData> {
         let _span = tracy_client::span!("LAZ::get_point_data");
 
@@ -115,9 +120,9 @@ impl PointDataLoader for LAZPointDataReader {
             .decompress_many(point_buffer.get_point_range_mut(0..point_range.len()))
             .context("Decompressing LAZ points failed")?;
 
-        if *target_layout == self.default_point_layout {
-            // If the target layout matches the default binary layout of the LAZ file, we can simply return the
-            // decompressed buffer
+        if *target_layout == self.default_point_layout
+            && desired_memory_layout == PointDataMemoryLayout::Interleaved
+        {
             Ok(PointData::OwnedInterleaved(point_buffer))
         } else {
             let _span = tracy_client::span!("LAZ::get_point_data_with_conversion");
@@ -159,8 +164,16 @@ impl PointDataLoader for LAZPointDataReader {
                     false,
                 );
             }
-            let converted_points = converter.convert::<VectorBuffer, _>(&point_buffer);
-            Ok(PointData::OwnedInterleaved(converted_points))
+            match desired_memory_layout {
+                PointDataMemoryLayout::Interleaved => {
+                    let converted_points = converter.convert::<VectorBuffer, _>(&point_buffer);
+                    Ok(PointData::OwnedInterleaved(converted_points))
+                }
+                PointDataMemoryLayout::Columnar => {
+                    let converted_points = converter.convert::<HashMapBuffer, _>(&point_buffer);
+                    Ok(PointData::OwnedColumnar(converted_points))
+                }
+            }
         }
     }
 
@@ -204,8 +217,15 @@ impl PointDataLoader for LAZPointDataReader {
                     "No statistics for point record format {point_record_format} of LAS file found"
                 )
             })?;
-        let points_per_second = million_points_per_second * 1e6;
+        // Measured values for I/O throughput are single-threaded, and for LAZ we get a huge speedup from parallelism
+        // due to the overhead of decoding LAZ
+        const LAZ_PARALLELISM_FACTOR: f64 = 6.0;
+        let points_per_second = million_points_per_second * 1e6 * LAZ_PARALLELISM_FACTOR;
         let expected_time_seconds = point_range.len() as f64 / points_per_second;
         Ok(Duration::from_secs_f64(expected_time_seconds))
+    }
+
+    fn preferred_memory_layout(&self) -> PointDataMemoryLayout {
+        PointDataMemoryLayout::Interleaved
     }
 }

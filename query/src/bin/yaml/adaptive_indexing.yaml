@@ -18,6 +18,9 @@ input_variables:
 - name: Refinement strategy
   description: Which refinement strategy was used?
   data_type: Label
+- name: File format
+  description: The file format of the dataset
+  data_type: Label
 output_variables:
 - name: Query runtime
   description: The runtime of the query (without index refinement)

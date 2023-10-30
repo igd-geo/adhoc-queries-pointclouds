@@ -172,10 +172,11 @@ pub(crate) fn get_data_with_at_least_attribute(
         attribute.clone()
     };
 
-    // TODO What did I do here? Why does this work? This doesn't even check if the borrowed data contains the attribute :(
+    let preferred_memory_layout =
+        input_layer.get_preferred_memory_layout(FileHandle(dataset_id, block.file_index))?;
     if input_layer.can_get_borrowed_point_data(dataset_id, block.clone())? {
         input_layer
-            .get_point_data(dataset_id, block.clone())
+            .get_point_data(dataset_id, block.clone(), preferred_memory_layout)
             .context("Could not access point data")
     } else {
         let custom_layout = PointLayout::from_attributes(&[native_attribute]);
@@ -184,6 +185,7 @@ pub(crate) fn get_data_with_at_least_attribute(
             block.clone(),
             &custom_layout,
             false, //LAS family of files never uses positions in world space
+            preferred_memory_layout,
         )
     }
 }
@@ -1133,11 +1135,14 @@ impl CompiledQueryAtom for LasQueryAtomCompare<DiscreteLod> {
         let _span = tracy_client::span!("LasQueryAtomCompare<GpsTime>::eval");
 
         let custom_layout = PointLayout::from_attributes(&[POSITION_3D]);
+        let preferred_memory_layout =
+            input_layer.get_preferred_memory_layout(FileHandle(dataset_id, block.file_index))?;
         let point_data = input_layer.get_point_data_in_layout(
             dataset_id,
             block.clone(),
             &custom_layout,
             true, // We need positions in world space for grid-center sampling
+            preferred_memory_layout,
         )?;
 
         const ROOT_GRID_SIZE: usize = 64;

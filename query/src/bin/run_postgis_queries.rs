@@ -522,7 +522,7 @@ fn get_queries_ca13_patches(output_format: &str) -> Vec<NamedQuery> {
         FROM (
             SELECT pa AS patches 
             FROM ca13s 
-            WHERE PC_Intersects(ST_MakeEnvelope(734000.0, 3889087.89, 735000.00, 3905000.0, 4329), pa) {limit_str}
+            WHERE PC_Intersects(ST_MakeEnvelope(734750.0, 3891000.0, 735000.00, 3900000.0, 4329), pa) {limit_str}
         ) AS subquery"
     );
     let bounds_large_query = format!(
@@ -530,7 +530,7 @@ fn get_queries_ca13_patches(output_format: &str) -> Vec<NamedQuery> {
         FROM (
             SELECT pa AS patches 
             FROM ca13s 
-            WHERE PC_Intersects(ST_MakeEnvelope(715932.19, 3889087.89, 736910.93, 3905000.0, 4329), pa) {limit_str}
+            WHERE PC_Intersects(ST_MakeEnvelope(732000.0, 3889087.89, 736910.93, 3902000.0, 4329), pa) {limit_str}
         ) AS subquery"
     );
     let bounds_all_query = format!(

@@ -103,7 +103,7 @@ fn get_query() -> QueryExpression {
     ));
 
     // _doc_aabb_small
-    vegetation_classes
+    lod0
     // QueryExpression::Or(
     //     Box::new(doc_time_range_5percent.clone()),
     //     Box::new(_doc_aabb_large.clone()),
@@ -158,7 +158,7 @@ fn main() -> Result<()> {
     let stats = progressive_index.dataset_stats(dataset_id);
     eprintln!("Stats:\n{stats}");
 
-    let output = LASOutput::new("ahn4s_vegetation.las", stats.point_layout())?;
+    // let output = LASOutput::new("ahn4s_vegetation.las", stats.point_layout())?;
     // let output = StdoutOutput::new(
     //     point_layout_from_las_point_format(&Format::new(6)?, true)?,
     //     // [
@@ -169,14 +169,18 @@ fn main() -> Result<()> {
     //     // .collect(),
     //     true,
     // );
-    // let output = CountOutput::default();
+    let output = CountOutput::default();
     // let output = NullOutput::default();
 
     let query = get_query();
     eprintln!("Query: {query}");
     // for run_id in 0..5 {
-    let stats =
-        progressive_index.query(dataset_id, query.clone(), &NoRefinementStrategy, &output)?;
+    let stats = progressive_index.query(
+        dataset_id,
+        query.clone(),
+        &AlwaysRefinementStrategy,
+        &output,
+    )?;
     //     eprintln!("Run {run_id}:\n{stats}");
     // }
 

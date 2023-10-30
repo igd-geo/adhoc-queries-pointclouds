@@ -124,6 +124,24 @@ impl<'a> InterleavedBuffer<'a> for PointData {
     }
 }
 
+impl From<VectorBuffer> for PointData {
+    fn from(value: VectorBuffer) -> Self {
+        Self::OwnedInterleaved(value)
+    }
+}
+
+impl From<HashMapBuffer> for PointData {
+    fn from(value: HashMapBuffer) -> Self {
+        Self::OwnedColumnar(value)
+    }
+}
+
+#[derive(Debug, PartialEq, Eq, Copy, Clone)]
+pub enum PointDataMemoryLayout {
+    Interleaved,
+    Columnar,
+}
+
 /// Trait for point data loaders that specific format loaders can implement. This makes the input layer code
 /// a bit simpler
 pub(crate) trait PointDataLoader: Send + Sync {
@@ -133,6 +151,7 @@ pub(crate) trait PointDataLoader: Send + Sync {
         point_range: Range<usize>,
         target_layout: &PointLayout,
         positions_in_world_space: bool,
+        desired_memory_layout: PointDataMemoryLayout,
     ) -> Result<PointData>;
     /// Return the number of bytes that this data loader currently uses. This is necessary to
     /// prevent memory overflows for data loaders that use `mmap`
@@ -149,6 +168,8 @@ pub(crate) trait PointDataLoader: Send + Sync {
         point_range: &Range<usize>,
         value_type: ValueType,
     ) -> Result<Duration>;
+    /// The preferred memory layout of this `PointDataLoader`
+    fn preferred_memory_layout(&self) -> PointDataMemoryLayout;
 }
 
 /// Handles low-level data access and provides access to point data for the query layer
@@ -229,6 +250,7 @@ impl InputLayer {
         &self,
         dataset_id: DatasetID,
         point_range: PointRange,
+        desired_memory_layout: PointDataMemoryLayout,
     ) -> Result<PointData> {
         let _span = tracy_client::span!("InputLayer::get_point_data");
         let file_handle = FileHandle(dataset_id, point_range.file_index);
@@ -237,6 +259,7 @@ impl InputLayer {
                 point_range.points_in_file,
                 loader.default_point_layout(),
                 loader.has_positions_in_world_space(),
+                desired_memory_layout,
             )
         })
     }
@@ -247,6 +270,7 @@ impl InputLayer {
         point_range: PointRange,
         point_layout: &PointLayout,
         positions_in_worldspace: bool,
+        desired_memory_layout: PointDataMemoryLayout,
     ) -> Result<PointData> {
         let _span = tracy_client::span!("InputLayer::get_point_data_in_layout");
         let file_handle = FileHandle(dataset_id, point_range.file_index);
@@ -255,6 +279,7 @@ impl InputLayer {
                 point_range.points_in_file,
                 point_layout,
                 positions_in_worldspace,
+                desired_memory_layout,
             )
         })
     }
@@ -276,6 +301,14 @@ impl InputLayer {
             .get_las_metadata(file_handle)
             .ok_or(anyhow!("File metadata for file {file_handle} not found"))?;
         point_layout_from_las_metadata(metadata, true)
+    }
+
+    pub fn get_preferred_memory_layout(
+        &self,
+        file_handle: FileHandle,
+    ) -> Result<PointDataMemoryLayout> {
+        self.get_or_create_loader(file_handle)
+            .map(|loader| loader.preferred_memory_layout())
     }
 
     /// Get an estimate for how long it will take the InputLayer to read data for the `value_type` of `point_range` from

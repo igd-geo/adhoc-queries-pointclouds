@@ -2,7 +2,7 @@ use anyhow::{anyhow, Result};
 use pasture_core::containers::BorrowedBuffer;
 use query::{
     index::PointRange,
-    io::{FileHandle, InputLayer},
+    io::{FileHandle, InputLayer, PointDataMemoryLayout},
 };
 
 const TEST_LAS_FILE: &str =
@@ -28,10 +28,21 @@ fn test_input_layer_format_equivalence() -> Result<()> {
     let num_points = file_meta.point_count();
 
     // Assert the equivalence of the data for LAS, LAZ, and LAST file formats when using the InputLayer
-    let las_data = input_layer.get_point_data(las_dataset_id, PointRange::new(0, 0..num_points))?;
-    let laz_data = input_layer.get_point_data(laz_dataset_id, PointRange::new(0, 0..num_points))?;
-    let last_data =
-        input_layer.get_point_data(last_dataset_id, PointRange::new(0, 0..num_points))?;
+    let las_data = input_layer.get_point_data(
+        las_dataset_id,
+        PointRange::new(0, 0..num_points),
+        PointDataMemoryLayout::Interleaved,
+    )?;
+    let laz_data = input_layer.get_point_data(
+        laz_dataset_id,
+        PointRange::new(0, 0..num_points),
+        PointDataMemoryLayout::Interleaved,
+    )?;
+    let last_data = input_layer.get_point_data(
+        last_dataset_id,
+        PointRange::new(0, 0..num_points),
+        PointDataMemoryLayout::Columnar,
+    )?;
 
     assert_eq!(las_data.point_layout(), laz_data.point_layout());
     assert_eq!(las_data.point_layout(), last_data.point_layout());

@@ -10,6 +10,7 @@ use itertools::Itertools;
 use pasture_core::nalgebra::Vector3;
 use rustc_hash::{FxHashMap, FxHashSet};
 use serde::{Deserialize, Serialize};
+use shapefile::Shape;
 
 use crate::util::{intersect_ranges, ranges_intersect};
 
@@ -95,6 +96,7 @@ pub trait Index: Send + Sync {
         num_points_in_block: usize,
     ) -> IndexResult;
     fn value_type(&self) -> ValueType;
+    fn shape(&self) -> Option<Shape>;
 }
 
 #[derive(Debug, PartialEq, Eq, Hash, Copy, Clone, Serialize, Deserialize)]

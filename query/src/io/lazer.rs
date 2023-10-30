@@ -10,7 +10,7 @@ use std::{
 use anyhow::{anyhow, bail, Context, Result};
 use io::lazer::LazerReader;
 use pasture_core::{
-    containers::{HashMapBuffer, MakeBufferFromLayout, OwningBuffer},
+    containers::{HashMapBuffer, MakeBufferFromLayout, OwningBuffer, VectorBuffer},
     layout::{attributes::POSITION_3D, PointLayout},
 };
 use pasture_io::{
@@ -21,7 +21,9 @@ use thread_local::ThreadLocal;
 
 use crate::{index::ValueType, io::PointData};
 
-use super::{FileFormat, IOMethod, IOStats, IOStatsParameters, PointDataLoader};
+use super::{
+    FileFormat, IOMethod, IOStats, IOStatsParameters, PointDataLoader, PointDataMemoryLayout,
+};
 
 /// Data loader for points in the LAZER custom format using `mmap`
 pub(crate) struct LAZERPointDataLoaderMmap {
@@ -66,32 +68,51 @@ impl PointDataLoader for LAZERPointDataLoaderMmap {
         point_range: Range<usize>,
         target_layout: &PointLayout,
         positions_in_world_space: bool,
+        desired_memory_layout: PointDataMemoryLayout,
     ) -> Result<super::PointData> {
         let _span = tracy_client::span!("LAZER::get_point_data");
 
         if point_range.is_empty() {
-            let empty_buffer = HashMapBuffer::new_from_layout(self.default_point_layout.clone());
-            return Ok(PointData::OwnedColumnar(empty_buffer));
-        }
+            match desired_memory_layout {
+                PointDataMemoryLayout::Interleaved => {
+                    Ok(VectorBuffer::new_from_layout(self.default_point_layout.clone()).into())
+                }
+                PointDataMemoryLayout::Columnar => {
+                    Ok(HashMapBuffer::new_from_layout(self.default_point_layout.clone()).into())
+                }
+            }
+        } else {
+            let mut lazer_reader =
+                LazerReader::new(Cursor::new(&self.mmap)).context("Failed to open LAZER reader")?;
+            lazer_reader.seek_point(SeekFrom::Start(point_range.start as u64))?;
 
-        let mut lazer_reader =
-            LazerReader::new(Cursor::new(&self.mmap)).context("Failed to open LAZER reader")?;
-        // if point_range.start > 0 {
-        lazer_reader.seek_point(SeekFrom::Start(point_range.start as u64))?;
-        // }
+            if positions_in_world_space {
+                if !target_layout.has_attribute(&POSITION_3D) {
+                    bail!("When `positions_in_world_space` is set to `true`, the target layout must contain a `POSITION_3D` attribute with `Vec3f64` as datatype!")
+                }
+            }
 
-        if positions_in_world_space {
-            if !target_layout.has_attribute(&POSITION_3D) {
-                bail!("When `positions_in_world_space` is set to `true`, the target layout must contain a `POSITION_3D` attribute with `Vec3f64` as datatype!")
+            match desired_memory_layout {
+                PointDataMemoryLayout::Interleaved => {
+                    let mut points =
+                        VectorBuffer::with_capacity(point_range.len(), target_layout.clone());
+                    points.resize(point_range.len());
+                    lazer_reader
+                        .read_into(&mut points, point_range.len())
+                        .context("Failed to read points")?;
+                    Ok(PointData::OwnedInterleaved(points))
+                }
+                PointDataMemoryLayout::Columnar => {
+                    let mut points =
+                        HashMapBuffer::with_capacity(point_range.len(), target_layout.clone());
+                    points.resize(point_range.len());
+                    lazer_reader
+                        .read_into(&mut points, point_range.len())
+                        .context("Failed to read points")?;
+                    Ok(PointData::OwnedColumnar(points))
+                }
             }
         }
-
-        let mut points = HashMapBuffer::with_capacity(point_range.len(), target_layout.clone());
-        points.resize(point_range.len());
-        lazer_reader
-            .read_into(&mut points, point_range.len())
-            .context("Failed to read points")?;
-        Ok(PointData::OwnedColumnar(points))
     }
 
     fn mem_size(&self) -> usize {
@@ -141,6 +162,10 @@ impl PointDataLoader for LAZERPointDataLoaderMmap {
             (point_range.len() as f64 / points_per_second) * value_type_percentage;
         Ok(Duration::from_secs_f64(expected_time_seconds))
     }
+
+    fn preferred_memory_layout(&self) -> PointDataMemoryLayout {
+        PointDataMemoryLayout::Columnar
+    }
 }
 
 pub(crate) struct LAZERPointDataLoaderFile {
@@ -182,30 +207,51 @@ impl PointDataLoader for LAZERPointDataLoaderFile {
         point_range: Range<usize>,
         target_layout: &PointLayout,
         positions_in_world_space: bool,
+        desired_memory_layout: PointDataMemoryLayout,
     ) -> Result<super::PointData> {
         let _span = tracy_client::span!("LAZER::get_point_data");
 
         if point_range.is_empty() {
-            let empty_buffer = HashMapBuffer::new_from_layout(self.default_point_layout.clone());
-            return Ok(PointData::OwnedColumnar(empty_buffer));
-        }
+            match desired_memory_layout {
+                PointDataMemoryLayout::Interleaved => {
+                    Ok(VectorBuffer::new_from_layout(self.default_point_layout.clone()).into())
+                }
+                PointDataMemoryLayout::Columnar => {
+                    Ok(HashMapBuffer::new_from_layout(self.default_point_layout.clone()).into())
+                }
+            }
+        } else {
+            let lazer_reader = self.get_thread_local_reader()?;
+            let mut lazer_reader_mut = lazer_reader.borrow_mut();
+            lazer_reader_mut.seek_point(SeekFrom::Start(point_range.start as u64))?;
 
-        let lazer_reader = self.get_thread_local_reader()?;
-        let mut lazer_reader_mut = lazer_reader.borrow_mut();
-        lazer_reader_mut.seek_point(SeekFrom::Start(point_range.start as u64))?;
+            if positions_in_world_space {
+                if !target_layout.has_attribute(&POSITION_3D) {
+                    bail!("When `positions_in_world_space` is set to `true`, the target layout must contain a `POSITION_3D` attribute with `Vec3f64` as datatype!")
+                }
+            }
 
-        if positions_in_world_space {
-            if !target_layout.has_attribute(&POSITION_3D) {
-                bail!("When `positions_in_world_space` is set to `true`, the target layout must contain a `POSITION_3D` attribute with `Vec3f64` as datatype!")
+            match desired_memory_layout {
+                PointDataMemoryLayout::Interleaved => {
+                    let mut points =
+                        VectorBuffer::with_capacity(point_range.len(), target_layout.clone());
+                    points.resize(point_range.len());
+                    lazer_reader_mut
+                        .read_into(&mut points, point_range.len())
+                        .context("Failed to read points")?;
+                    Ok(PointData::OwnedInterleaved(points))
+                }
+                PointDataMemoryLayout::Columnar => {
+                    let mut points =
+                        HashMapBuffer::with_capacity(point_range.len(), target_layout.clone());
+                    points.resize(point_range.len());
+                    lazer_reader_mut
+                        .read_into(&mut points, point_range.len())
+                        .context("Failed to read points")?;
+                    Ok(PointData::OwnedColumnar(points))
+                }
             }
         }
-
-        let mut points = HashMapBuffer::with_capacity(point_range.len(), target_layout.clone());
-        points.resize(point_range.len());
-        lazer_reader_mut
-            .read_into(&mut points, point_range.len())
-            .context("Failed to read points")?;
-        Ok(PointData::OwnedColumnar(points))
     }
 
     fn mem_size(&self) -> usize {
@@ -256,5 +302,9 @@ impl PointDataLoader for LAZERPointDataLoaderFile {
         let expected_time_seconds =
             (point_range.len() as f64 / points_per_second) * value_type_percentage;
         Ok(Duration::from_secs_f64(expected_time_seconds))
+    }
+
+    fn preferred_memory_layout(&self) -> PointDataMemoryLayout {
+        PointDataMemoryLayout::Columnar
     }
 }

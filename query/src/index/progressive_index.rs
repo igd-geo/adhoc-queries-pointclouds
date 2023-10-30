@@ -16,7 +16,6 @@
 //      3.5) Implement some refinement procedure that generates or improves the index for each block (this is TBD)
 
 use anyhow::{anyhow, bail, Context, Result};
-use human_repr::HumanCount;
 use itertools::Itertools;
 use log::info;
 use pasture_core::{
@@ -158,22 +157,14 @@ impl KnownDataset {
                     input_layer,
                 );
 
-                let total_points_to_refine = actual_candidates
-                    .iter()
-                    .map(|block| block.points_in_file.len())
-                    .sum::<usize>();
-                info!(
-                    "Refining {} blocks with a total of {} points",
-                    actual_candidates.len(),
-                    total_points_to_refine.human_count_bare()
-                );
-
                 index
                     .apply_refinements(actual_candidates, value_type, input_layer, dataset_id)
                     .context(format!(
                         "Failed to refine index for ValueType {}",
                         value_type
                     ))?;
+
+                // index.dump_position_indices(Path::new("position_index.shp"))?;
             }
         }
 
@@ -362,6 +353,7 @@ impl ProgressiveIndex {
                                         dataset_id,
                                         point_range,
                                         matching_indices_within_this_block,
+                                        block_length,
                                     )?;
 
                                     full_match_blocks.fetch_add(1, Ordering::SeqCst);
@@ -387,6 +379,7 @@ impl ProgressiveIndex {
                                             dataset_id,
                                             point_range,
                                             matching_indices_within_this_block,
+                                            num_matches,
                                         )?;
                                     }
 

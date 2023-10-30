@@ -21,7 +21,7 @@ use pasture_io::{base::PointWriter, las::LASWriter};
 
 use crate::{
     index::{DatasetID, PointRange},
-    io::{FileHandle, PointData},
+    io::{FileHandle, PointData, PointDataMemoryLayout},
 };
 
 use super::InputLayer;
@@ -34,6 +34,7 @@ pub trait PointOutput: Send + Sync {
         dataset_id: DatasetID,
         point_range: PointRange,
         matching_indices: &[bool],
+        match_count: usize,
     ) -> Result<()>;
 }
 
@@ -100,6 +101,7 @@ impl PointOutput for StdoutOutput {
         dataset_id: DatasetID,
         point_range: PointRange,
         matching_indices: &[bool],
+        match_count: usize,
     ) -> Result<()> {
         let _span = tracy_client::span!("StdoutOutput::output");
 
@@ -108,9 +110,11 @@ impl PointOutput for StdoutOutput {
             .get_default_point_layout_of_file(FileHandle(dataset_id, point_range.file_index))
             .context("Could not determine default PointLayout of file")?;
 
+        let preferred_memory_layout = input_layer
+            .get_preferred_memory_layout(FileHandle(dataset_id, point_range.file_index))?;
         let memory = if self.output_layout == file_point_layout {
             input_layer
-                .get_point_data(dataset_id, point_range.clone())
+                .get_point_data(dataset_id, point_range.clone(), preferred_memory_layout)
                 .context(format!(
                     "Could not get point data for points {point_range} in dataset {dataset_id}"
                 ))
@@ -121,6 +125,7 @@ impl PointOutput for StdoutOutput {
                     point_range.clone(),
                     &self.output_layout,
                     self.positions_in_world_space,
+                    preferred_memory_layout,
                 )
                 .context(format!(
                     "Could not get point data for points {point_range} in dataset {dataset_id}"
@@ -129,51 +134,43 @@ impl PointOutput for StdoutOutput {
 
         let size_of_point = self.output_layout.size_of_point_entry() as usize;
 
-        // If the data is columnar, we can't range-copy, but the current PointData interface does not have this
-        // information. Indicates to me that the interface is flawed...
+        // For now we always output data in interleaved format. We could support columnar data output as well,
+        // but since most applications assume interleaved point data it seems to be a reasonable default
         match memory {
-            PointData::OwnedColumnar(point_buffer) => {
-                let num_matches = matching_indices.iter().filter(|m| **m).count();
-                let mut interleaved_buffer = vec![0; num_matches * size_of_point];
-                for (index, point_chunk) in matching_indices
-                    .iter()
-                    .zip(interleaved_buffer.chunks_exact_mut(size_of_point))
-                    .enumerate()
-                    .filter_map(|(index, (is_match, chunk))| {
-                        if *is_match {
-                            Some((index, chunk))
-                        } else {
-                            None
-                        }
-                    })
-                {
-                    point_buffer.get_point(index, point_chunk);
-                }
-
+            PointData::OwnedColumnar(columnar_buffer) => {
+                let filtered_data =
+                    columnar_buffer.filter::<VectorBuffer, _>(|idx| matching_indices[idx]);
+                let filtered_memory = filtered_data.get_point_range_ref(0..filtered_data.len());
                 let mut stdout = std::io::stdout().lock();
-                stdout.write_all(&interleaved_buffer)?;
-                self.log_write(interleaved_buffer.len());
+                stdout.write_all(&filtered_memory)?;
+                self.log_write(filtered_memory.len());
             }
             _ => {
                 let points_range = memory.get_point_range_ref(0..memory.len());
 
-                let filtered_memory = points_range
-                    .chunks_exact(size_of_point)
-                    .enumerate()
-                    .filter_map(|(idx, data)| {
-                        if matching_indices[idx] {
-                            Some(data)
-                        } else {
-                            None
-                        }
-                    })
-                    .flatten()
-                    .copied()
-                    .collect::<Vec<_>>();
+                if match_count == memory.len() {
+                    let mut stdout = std::io::stdout().lock();
+                    stdout.write_all(points_range)?;
+                    self.log_write(points_range.len());
+                } else {
+                    let filtered_memory = points_range
+                        .chunks_exact(size_of_point)
+                        .enumerate()
+                        .filter_map(|(idx, data)| {
+                            if matching_indices[idx] {
+                                Some(data)
+                            } else {
+                                None
+                            }
+                        })
+                        .flatten()
+                        .copied()
+                        .collect::<Vec<_>>();
 
-                let mut stdout = std::io::stdout().lock();
-                stdout.write_all(&filtered_memory)?;
-                self.log_write(filtered_memory.len());
+                    let mut stdout = std::io::stdout().lock();
+                    stdout.write_all(&filtered_memory)?;
+                    self.log_write(filtered_memory.len());
+                }
             }
         }
 
@@ -204,10 +201,15 @@ impl PointOutput for InMemoryOutput {
         dataset_id: DatasetID,
         point_range: PointRange,
         matching_indices: &[bool],
+        _match_count: usize,
     ) -> Result<()> {
         assert_eq!(point_range.points_in_file.len(), matching_indices.len());
         let memory = input_layer
-            .get_point_data(dataset_id, point_range.clone())
+            .get_point_data(
+                dataset_id,
+                point_range.clone(),
+                PointDataMemoryLayout::Interleaved,
+            )
             .context(format!(
                 "Could not get point data for points {point_range} in dataset {dataset_id}"
             ))?;
@@ -241,6 +243,7 @@ impl PointOutput for NullOutput {
         _dataset_id: DatasetID,
         _point_range: PointRange,
         _matching_indices: &[bool],
+        _match_count: usize,
     ) -> Result<()> {
         // intentionally does nothing
         Ok(())
@@ -277,36 +280,48 @@ impl PointOutput for LASOutput {
         dataset_id: DatasetID,
         point_range: PointRange,
         matching_indices: &[bool],
+        match_count: usize,
     ) -> Result<()> {
         let memory = input_layer
-            .get_point_data_in_layout(dataset_id, point_range.clone(), &self.output_layout, true)
+            .get_point_data_in_layout(
+                dataset_id,
+                point_range.clone(),
+                &self.output_layout,
+                true,
+                PointDataMemoryLayout::Interleaved,
+            )
             .context("Could not get point data")?;
 
-        // This is pretty inefficient, but I currently see no other way besides collecting the data into a new
-        // buffer, since the `PointWriter::write` method expects a `BorrowedBuffer`, but we can't implement `SliceBuffer`
-        // on `PointData`, since the type of the slice depends on the variant of `PointData` (either a `VectorBuffer` or
-        // an `ExternalMemoryBuffer`)
-        let num_matches = matching_indices.iter().copied().filter(|b| *b).count();
-        let mut tmp_buffer = VectorBuffer::new_from_layout(self.output_layout.clone());
-        tmp_buffer.resize(num_matches);
-        let mut current_point: usize = 0;
+        if match_count == point_range.points_in_file.len() {
+            let mut writer = self.writer.lock().expect("Could not lock writer");
+            writer.write(&memory)?;
+        } else {
+            // This is pretty inefficient, but I currently see no other way besides collecting the data into a new
+            // buffer, since the `PointWriter::write` method expects a `BorrowedBuffer`, but we can't implement `SliceBuffer`
+            // on `PointData`, since the type of the slice depends on the variant of `PointData` (either a `VectorBuffer` or
+            // an `ExternalMemoryBuffer`)
+            let mut tmp_buffer = VectorBuffer::new_from_layout(self.output_layout.clone());
+            tmp_buffer.resize(match_count);
+            let mut current_point: usize = 0;
 
-        let mut single_point_buffer = vec![0; self.output_layout.size_of_point_entry() as usize];
+            let mut single_point_buffer =
+                vec![0; self.output_layout.size_of_point_entry() as usize];
 
-        for (point_index, _) in matching_indices
-            .iter()
-            .enumerate()
-            .filter(|(_, is_match)| **is_match)
-        {
-            memory.get_point(point_index, &mut single_point_buffer);
-            unsafe {
-                tmp_buffer.set_point(current_point, &single_point_buffer);
+            for (point_index, _) in matching_indices
+                .iter()
+                .enumerate()
+                .filter(|(_, is_match)| **is_match)
+            {
+                memory.get_point(point_index, &mut single_point_buffer);
+                unsafe {
+                    tmp_buffer.set_point(current_point, &single_point_buffer);
+                }
+                current_point += 1;
             }
-            current_point += 1;
-        }
 
-        let mut writer = self.writer.lock().expect("Could not lock writer");
-        writer.write(&tmp_buffer)?;
+            let mut writer = self.writer.lock().expect("Could not lock writer");
+            writer.write(&tmp_buffer)?;
+        }
 
         Ok(())
     }
@@ -330,10 +345,10 @@ impl PointOutput for CountOutput {
         _input_layer: &InputLayer,
         _dataset_id: DatasetID,
         _point_range: PointRange,
-        matching_indices: &[bool],
+        _matching_indices: &[bool],
+        match_count: usize,
     ) -> Result<()> {
-        let count = matching_indices.iter().filter(|b| **b).count();
-        self.count.fetch_add(count, Ordering::SeqCst);
+        self.count.fetch_add(match_count, Ordering::SeqCst);
         Ok(())
     }
 }

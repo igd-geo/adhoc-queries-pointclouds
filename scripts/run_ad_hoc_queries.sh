@@ -27,7 +27,7 @@ export RUST_LOG=info
 # whereas the file-based readers use locking. For single files, this is super slow of course, as it kills all parallelism
 # so sometimes it makes sense to force the usage of `mmap`
 # export FORCE_MMAP=1
-export EXAR_LOCAL=1
+# export EXAR_LOCAL=1
 
 cd "${0%/*}" && cd ..
 cargo build --release --bin query_experiments_wip

@@ -67,7 +67,8 @@ impl TimeBudgetRefinementStrategy {
     /// How many times the pure I/O duration do we think refinement takes? This is an estimate based on
     /// intuition as well as some measurements. We know I/O is not parallelized, but the actual refinement
     /// is mostly compute and hence is parallelized, so the overhead should be small
-    const IO_TO_REFINEMENT_FACTOR: f64 = 1.2;
+    const IO_TO_REFINEMENT_FACTOR_UNCOMPRESSED: f64 = 1.2;
+    const IO_TO_REFINEMENT_FACTOR_LAZ: f64 = 0.15;
 
     pub fn new(max_time: Duration) -> Self {
         Self { max_time }
@@ -92,7 +93,7 @@ impl RefinementStrategy for TimeBudgetRefinementStrategy {
                     .estimate_io_time_for_point_range(dataset_id, &range, value_type)
                     .unwrap_or(Duration::MAX);
                 let expected_refinement_time =
-                    expected_time_io.mul_f64(Self::IO_TO_REFINEMENT_FACTOR);
+                    expected_time_io.mul_f64(Self::IO_TO_REFINEMENT_FACTOR_UNCOMPRESSED);
                 Some((expected_refinement_time, range))
             })
             .collect::<Vec<_>>();

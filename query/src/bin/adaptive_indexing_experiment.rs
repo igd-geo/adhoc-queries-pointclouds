@@ -18,8 +18,9 @@ use pasture_core::{
 use pasture_io::las::{point_layout_from_las_metadata, LASReader};
 use query::{
     index::{
-        AlwaysRefinementStrategy, AtomicExpression, Classification, CompareExpression, Position,
-        ProgressiveIndex, QueryExpression, RefinementStrategy, TimeBudgetRefinementStrategy, Value,
+        AlwaysRefinementStrategy, AtomicExpression, Classification, CompareExpression,
+        NoRefinementStrategy, Position, ProgressiveIndex, QueryExpression, RefinementStrategy,
+        TimeBudgetRefinementStrategy, Value,
     },
     io::StdoutOutput,
 };
@@ -112,7 +113,7 @@ fn get_test_queries_ahn4s() -> Vec<(String, Vec<QueryExpression>)> {
         ),
         ("Large to small".to_string(), large_to_small_queries),
         (
-            "Buildings repreated".to_string(),
+            "Buildings repeated".to_string(),
             vec![buildings_query; REPEATS],
         ),
     ]
@@ -217,6 +218,10 @@ fn run_adaptive_query(
                     "Refinement strategy",
                     GenericValue::String(query_params.refinement_strategy_label.to_string()),
                 ),
+                (
+                    "File format",
+                    GenericValue::String(query_params.file_format.to_string()),
+                ),
             ])
             .context("Failed to create ExperimentInstance")?;
 
@@ -260,6 +265,13 @@ fn main() -> Result<()> {
     pretty_env_logger::init();
     let _client = tracy_client::Client::start();
 
+    // If desired, keep 2 logical cores free so we can do other stuff while the experiment runs
+    // Doesn't work too well though...
+    // let max_hardware_threads = std::thread::available_parallelism()?;
+    // rayon::ThreadPoolBuilder::new()
+    //     .num_threads(max_hardware_threads.get() - 2)
+    //     .build_global()?;
+
     let machine = std::env::var("MACHINE").context("To run experiments, please set the 'MACHINE' environment variable to the name of the machine that you are running this experiment on. This is required so that experiment data can be mapped to the actual machine that ran the experiment. This will typically be the name or system configuration of the computer that runs the experiment.")?;
 
     let experiment_description = include_str!("yaml/adaptive_indexing.yaml");
@@ -267,25 +279,30 @@ fn main() -> Result<()> {
         .context("Could not get current version of experiment")?;
 
     let refinement_strategies: Vec<(&'static str, Box<dyn RefinementStrategy>)> = vec![
-        // Makes no sense to test NoRefinementStrategy, we get this data for free from the first run with any of the other
-        // refinement strategies (initial query is always unrefined!)
-        ("Everything", Box::new(AlwaysRefinementStrategy)),
+        ("No adaptive indexing", Box::new(NoRefinementStrategy)),
+        ("Refine always", Box::new(AlwaysRefinementStrategy)),
         (
-            "Timed (5s)",
+            "Refine timed (5s)",
             Box::new(TimeBudgetRefinementStrategy::new(Duration::from_secs(5))),
         ),
         (
-            "Timed (10s)",
+            "Refine timed (10s)",
             Box::new(TimeBudgetRefinementStrategy::new(Duration::from_secs(10))),
         ),
     ];
 
-    let file_extensions = ["las", "last", "laz", "lazer"];
+    let file_extensions = [
+        //"las",
+        // "last",
+        "laz",
+        // "lazer",
+    ];
+    // let file_extensions = &file_extensions[1..2];
 
     for extension in file_extensions {
         let ahn4s_files = get_files_with_extension(
             extension,
-            "/Users/pbormann/data/projects/progressive_indexing/experiment_data/ahn4s",
+            format!("/Users/pbormann/data/projects/progressive_indexing/experiment_data/ahn4s/{extension}"),
         );
         let ahn4s_metadata = LASReader::from_path(&ahn4s_files[0], false)
             .context("Failed to open first file from AHN4-S dataset")?
