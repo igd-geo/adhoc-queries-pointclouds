@@ -498,7 +498,7 @@ fn get_ca13_config(args: &Args) -> Result<DatasetConfig> {
     let datasets = vec![
         ("LAS", las_files),
         ("LAST", last_files),
-        ("LAZ", laz_files),
+        // ("LAZ", laz_files),
         ("LAZER", lazer_files),
     ];
 
@@ -508,10 +508,10 @@ fn get_ca13_config(args: &Args) -> Result<DatasetConfig> {
     let output_point_layouts = vec![
         ("All (default)", point_layout_from_las_metadata(&metadata, false)?),
         ("All (native)", point_layout_from_las_metadata(&metadata, true)?),
-        ("Positions", [POSITION_3D].into_iter().collect::<PointLayout>()),
-        ("Positions, classifications, intensities", [POSITION_3D, CLASSIFICATION, INTENSITY]
-            .into_iter()
-            .collect::<PointLayout>()),
+        // ("Positions", [POSITION_3D].into_iter().collect::<PointLayout>()),
+        // ("Positions, classifications, intensities", [POSITION_3D, CLASSIFICATION, INTENSITY]
+        //     .into_iter()
+        //     .collect::<PointLayout>()),
     ];
 
     Ok(DatasetConfig { dataset_name: "CA13", queries, datasets, output_point_layouts, })
