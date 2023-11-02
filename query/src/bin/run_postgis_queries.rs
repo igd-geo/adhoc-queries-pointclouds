@@ -25,7 +25,7 @@ impl Dataset {
     fn table_name(&self) -> &'static str {
         match self {
             Dataset::Doc => "doc",
-            Dataset::CA13 => "ca13",
+            Dataset::CA13 => "ca13s",
             Dataset::AHN4S => "ahn4s",
         }
     }
