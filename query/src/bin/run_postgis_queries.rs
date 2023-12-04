@@ -549,6 +549,17 @@ fn get_queries_ca13_patches(output_format: &str) -> Vec<NamedQuery> {
             FROM ca13s {limit_str}
         ) AS subquery"
     );
+    let buildings_in_small_polygon_query = format!(
+        "SELECT {output_format} 
+        FROM (
+            SELECT PC_FilterEquals(pa, 'Classification', 6) AS patches 
+            FROM ca13s {limit_str}
+            WHERE PC_Intersects(
+                ST_Transform((SELECT geom FROM ca13s_shapes WHERE name='Polygon small'), 4329),
+                pa
+            )
+        ) AS subquery"
+    );
     let vegetation_query = format!(
         "SELECT {output_format} 
         FROM (
@@ -613,6 +624,10 @@ fn get_queries_ca13_patches(output_format: &str) -> Vec<NamedQuery> {
         NamedQuery {
             name: "Buildings",
             query: buildings_query,
+        },
+        NamedQuery {
+            name: "Buildings in small polygon",
+            query: buildings_in_small_polygon_query,
         },
         NamedQuery {
             name: "Vegetation",

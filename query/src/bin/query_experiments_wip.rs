@@ -498,7 +498,7 @@ fn get_ca13_config(args: &Args) -> Result<DatasetConfig> {
     let datasets = vec![
         ("LAS", las_files),
         ("LAST", last_files),
-        // ("LAZ", laz_files),
+        ("LAZ", laz_files),
         ("LAZER", lazer_files),
     ];
 

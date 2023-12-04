@@ -50,4 +50,4 @@ export RUST_LOG=info
 
 cd "${0%/*}" && cd ..
 cargo build --release --bin run_postgis_queries &&
-./target/release/run_postgis_queries $1
+./target/release/run_postgis_queries $1 "Buildings in small polygon"

@@ -3,7 +3,6 @@ use std::{fmt::Display, ops::Range, collections::HashMap, path::Path};
 use anyhow::{anyhow, Result, Context};
 use divide_range::RangeDivisions;
 use geo::{coord, Intersects, Contains};
-use itertools::Itertools;
 use pasture_core::{
     math::AABB,
     nalgebra::{Point3, Vector3}, layout::attributes::CLASSIFICATION, containers::BorrowedBuffer,
@@ -546,7 +545,7 @@ impl BlockIndex {
         Ok(())
     }
 
-    pub(crate) fn dump_position_indices(&self, file: &Path) -> Result<()> {
+    pub(crate) fn _dump_position_indices(&self, file: &Path) -> Result<()> {
         let position_indices = self.blocks.iter().filter_map(|block| block.index.as_ref().and_then(|index| index.shape()));
 
         let table_builder = shapefile::dbase::TableWriterBuilder::new()

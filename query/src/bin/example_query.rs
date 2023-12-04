@@ -5,24 +5,14 @@ use std::{
 
 use anyhow::{bail, Context, Result};
 use geo::{line_string, MultiPolygon, Polygon};
-use pasture_core::{
-    layout::{
-        attributes::{CLASSIFICATION, GPS_TIME, POSITION_3D},
-        PointAttributeDataType, PointLayout,
-    },
-    nalgebra::Vector3,
-};
-use pasture_io::{
-    las::{point_layout_from_las_point_format, LASReader},
-    las_rs::point::Format,
-};
+use pasture_core::nalgebra::Vector3;
 use query::{
     index::{
         AlwaysRefinementStrategy, AtomicExpression, Classification, CompareExpression, DiscreteLod,
-        Geometry, GpsTime, NoRefinementStrategy, NumberOfReturns, Position, ProgressiveIndex,
-        QueryExpression, ReturnNumber, Value,
+        Geometry, GpsTime, NumberOfReturns, Position, ProgressiveIndex, QueryExpression,
+        ReturnNumber, Value,
     },
-    io::{CountOutput, LASOutput, NullOutput, StdoutOutput},
+    io::CountOutput,
 };
 use shapefile::{Shape, ShapeReader};
 use walkdir::WalkDir;
@@ -72,13 +62,13 @@ fn get_query() -> QueryExpression {
         Value::NumberOfReturns(NumberOfReturns(2)),
     )));
 
-    let third_or_higher_return = QueryExpression::Atomic(AtomicExpression::Compare((
+    let _third_or_higher_return = QueryExpression::Atomic(AtomicExpression::Compare((
         CompareExpression::GreaterThan,
         Value::ReturnNumber(ReturnNumber(2)),
     )));
 
     // Everything with at least three returns, but give us the first return. This should be the canopies
-    let maybe_vegetation = QueryExpression::And(
+    let _maybe_vegetation = QueryExpression::And(
         Box::new(at_least_three_returns.clone()),
         Box::new(QueryExpression::Atomic(AtomicExpression::Compare((
             CompareExpression::Equals,
@@ -86,7 +76,7 @@ fn get_query() -> QueryExpression {
         )))),
     );
 
-    let doc_time_range_5percent = QueryExpression::Atomic(AtomicExpression::Within(
+    let _doc_time_range_5percent = QueryExpression::Atomic(AtomicExpression::Within(
         Value::GpsTime(GpsTime(207011500.0))..Value::GpsTime(GpsTime(207012000.0)),
     ));
 
@@ -94,11 +84,11 @@ fn get_query() -> QueryExpression {
         CompareExpression::Equals,
         Value::LOD(DiscreteLod(0)),
     )));
-    let lod2 = QueryExpression::Atomic(AtomicExpression::Compare((
+    let _lod2 = QueryExpression::Atomic(AtomicExpression::Compare((
         CompareExpression::Equals,
         Value::LOD(DiscreteLod(2)),
     )));
-    let vegetation_classes = QueryExpression::Atomic(AtomicExpression::Within(
+    let _vegetation_classes = QueryExpression::Atomic(AtomicExpression::Within(
         Value::Classification(Classification(3))..Value::Classification(Classification(6)),
     ));
 
@@ -131,7 +121,7 @@ fn main() -> Result<()> {
         bail!("No shapes found in shapefile");
     }
     let first_shape = &shapes[0];
-    let shapefile_query = match first_shape {
+    let _shapefile_query = match first_shape {
         Shape::Polygon(poly) => {
             let geo_polygon: MultiPolygon = poly.clone().into();
             let first_polygon = geo_polygon.0[0].clone();
@@ -175,7 +165,7 @@ fn main() -> Result<()> {
     let query = get_query();
     eprintln!("Query: {query}");
     // for run_id in 0..5 {
-    let stats = progressive_index.query(
+    let _stats = progressive_index.query(
         dataset_id,
         query.clone(),
         &AlwaysRefinementStrategy,

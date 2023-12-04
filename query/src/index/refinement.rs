@@ -68,7 +68,6 @@ impl TimeBudgetRefinementStrategy {
     /// intuition as well as some measurements. We know I/O is not parallelized, but the actual refinement
     /// is mostly compute and hence is parallelized, so the overhead should be small
     const IO_TO_REFINEMENT_FACTOR_UNCOMPRESSED: f64 = 1.2;
-    const IO_TO_REFINEMENT_FACTOR_LAZ: f64 = 0.15;
 
     pub fn new(max_time: Duration) -> Self {
         Self { max_time }
